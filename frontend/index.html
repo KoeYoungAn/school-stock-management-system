@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>School Stock Management System</title>
+
+    <!-- Google Sans (English default) + Noto Sans Khmer (Khmer) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Noto+Sans+Khmer:wght@400;500;700&display=swap" rel="stylesheet" />
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = { darkMode: 'class' }
+    </script>
+    <style>
+      html, body, #root { height: 100%; }
+
+      /* Default font — Google Sans for all languages */
+      body {
+        font-family: "Google Sans", "Roboto", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 16px;
+      }
+
+      /* Khmer font override — applied when <html lang="km"> */
+      html[lang="km"] body,
+      html[lang="km"] * {
+        font-family: "Noto Sans Khmer", "Google Sans", sans-serif;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50 dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
