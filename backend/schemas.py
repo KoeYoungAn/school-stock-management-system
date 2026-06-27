@@ -304,7 +304,8 @@ class ReceiveMoreRequest(BaseModel):
 class DirectReceiptCreate(BaseModel):
     """Direct stock receipt without PO - for opening stock, donations, emergency receipt"""
     item_id: int
-    quantity: int = Field(gt=0)
+    quantity_received: Optional[int] = Field(default=None, gt=0)
+    quantity: Optional[int] = Field(default=None, gt=0)  # compatibility with existing frontend draft
     source: str = Field(min_length=1)  # e.g., "Opening Stock", "Donation", "Emergency"
     reason: str = Field(min_length=1)  # e.g., "Initial inventory", "Donated by..."
     receiver_name: str = Field(min_length=1)

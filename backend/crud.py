@@ -904,31 +904,66 @@ def list_rcv(page: int = 1, limit: int = 20, search: str = "",
             "total": total, "page": page, "limit": limit}
 
 
+def _apply_po_status_without_commit(po: models.PurchaseOrder):
+    items = po.items
+    total_ord = sum(i.quantity_ordered for i in items) if items else 0
+    total_rcv = sum(i.quantity_received or 0 for i in items) if items else 0
+    if total_ord and total_rcv >= total_ord:
+        po.status = "Received"
+    elif total_rcv > 0:
+        po.status = "Partially Received"
+
+
+def _create_po_receiving_record(db: Session, po: models.PurchaseOrder,
+                                poi: models.PurchaseOrderItem,
+                                payload: schemas.ReceivingCreate, user_id: int):
+    """Create one PO-linked receiving record and update stock in one transaction."""
+    already_received = poi.quantity_received or 0
+    remaining = poi.quantity_ordered - already_received
+    if payload.quantity_received > remaining:
+        raise HTTPException(400, f"Cannot receive more than remaining quantity ({remaining})")
+
+    item = poi.item
+    if not item:
+        raise HTTPException(404, "Item not found")
+
+    r = models.Receiving(
+        receiving_number=gen_receiving_number(db),
+        purchase_order_id=po.id,
+        purchase_order_item_id=poi.id,
+        item_id=item.id,
+        quantity_received=payload.quantity_received,
+        receiver_name=payload.receiver_name,
+        status=payload.status,
+        notes=payload.notes,
+    )
+    db.add(r)
+    db.flush()
+
+    if payload.status == "Received":
+        record_movement(db, item, "IN", payload.quantity_received,
+                        "Receiving", r.id, user_id, f"Receiving {r.receiving_number}")
+        poi.quantity_received = already_received + payload.quantity_received
+        _apply_po_status_without_commit(po)
+
+    db.add(models.AuditLog(
+        user_id=user_id, action="create", module="receiving",
+        record_id=r.id, description=f"Created receiving {r.receiving_number}"
+    ))
+    return r
+
+
 @rcv_router.post("")
 def create_rcv(payload: schemas.ReceivingCreate, db: Session = Depends(get_db),
                user: models.User = Depends(require_staff)):
-    if payload.quantity_received <= 0:
-        raise HTTPException(400, "Quantity must be positive")
-
-    # ENFORCE PO REQUIREMENT: Normal receiving must link to a Purchase Order
-    if payload.status == "Received":
-        if not payload.purchase_order_id or not payload.purchase_order_item_id:
-            raise HTTPException(
-                400,
-                "Purchase Order is required for receiving supplier items. "
-                "For opening stock, donations, or manual entries, use Direct Stock Receipt instead."
-            )
-
-    if payload.purchase_order_item_id:
-        poi = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == payload.purchase_order_item_id).first()
-        if not poi:
-            raise HTTPException(404, "Purchase order item not found")
-
-        # Additional validations
-        if poi.purchase_order_id != payload.purchase_order_id:
-            raise HTTPException(400, "PO line item does not belong to the selected Purchase Order")
-        if poi.item_id != payload.item_id:
-            raise HTTPException(400, "Selected item must match the PO line item")
+    """PO receiving only. Direct/manual stock must use Direct Stock Receipt."""
+    try:
+        if payload.quantity_received <= 0:
+            raise HTTPException(400, "Quantity must be positive")
+        if not payload.purchase_order_id:
+            raise HTTPException(400, "Please select a purchase order to receive supplier items.")
+        if not payload.purchase_order_item_id:
+            raise HTTPException(400, "Please select a PO line item to receive supplier items.")
 
         po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == payload.purchase_order_id).first()
         if not po:
@@ -936,33 +971,20 @@ def create_rcv(payload: schemas.ReceivingCreate, db: Session = Depends(get_db),
         if po.status not in ("Approved", "Partially Received"):
             raise HTTPException(400, f"Purchase Order must be Approved or Partially Received (current status: {po.status})")
 
-        already_received = poi.quantity_received or 0
-        remaining = poi.quantity_ordered - already_received
-        if payload.quantity_received > remaining:
-            raise HTTPException(400, f"Cannot receive more than remaining quantity ({remaining})")
+        poi = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == payload.purchase_order_item_id).first()
+        if not poi:
+            raise HTTPException(404, "Purchase order item not found")
+        if poi.purchase_order_id != po.id:
+            raise HTTPException(400, "PO line item does not belong to the selected Purchase Order")
+        if poi.item_id != payload.item_id:
+            raise HTTPException(400, "Selected item must match the PO line item")
 
-    item = db.query(models.InventoryItem).filter(models.InventoryItem.id == payload.item_id).first()
-    if not item:
-        raise HTTPException(404, "Item not found")
-    r = models.Receiving(
-        receiving_number=gen_receiving_number(db),
-        purchase_order_id=payload.purchase_order_id,
-        purchase_order_item_id=payload.purchase_order_item_id,
-        item_id=payload.item_id, quantity_received=payload.quantity_received,
-        receiver_name=payload.receiver_name, status=payload.status, notes=payload.notes,
-    )
-    db.add(r); db.flush()
-    if payload.status == "Received":
-        record_movement(db, item, "IN", payload.quantity_received,
-                        "Receiving", r.id, user.id, f"Receiving {r.receiving_number}")
-        if payload.purchase_order_item_id:
-            poi = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == payload.purchase_order_item_id).first()
-            if poi:
-                poi.quantity_received = (poi.quantity_received or 0) + payload.quantity_received
-    db.commit()
-    _refresh_po_status(db, payload.purchase_order_id)
-    log_audit(db, user.id, "create", "receiving", r.id, f"Created receiving {r.receiving_number}")
-    return {"id": r.id, "receiving_number": r.receiving_number}
+        r = _create_po_receiving_record(db, po, poi, payload, user.id)
+        db.commit()
+        return {"id": r.id, "receiving_number": r.receiving_number}
+    except Exception:
+        db.rollback()
+        raise
 
 
 @rcv_router.get("/{rid}")
@@ -1052,56 +1074,69 @@ direct_receipt_router = APIRouter(prefix="/api/direct-receipt", tags=["direct-re
 def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = Depends(get_db),
                           user: models.User = Depends(require_staff)):
     """
-    Direct Stock Receipt - for opening stock, donations, emergency receipt, approved manual entry.
-    Does NOT link to Purchase Orders. Creates stock movement with source_type="DIRECT_RECEIPT".
+    Direct Stock Receipt - for opening stock, donation, emergency stock,
+    or approved manual entry. This is separate from PO receiving.
     """
-    if payload.quantity <= 0:
-        raise HTTPException(400, "Quantity must be positive")
+    try:
+        qty = payload.quantity_received or payload.quantity
+        if not qty or qty <= 0:
+            raise HTTPException(400, "Quantity must be positive")
+        if not payload.source or not payload.source.strip():
+            raise HTTPException(400, "Source is required")
+        if not payload.reason or not payload.reason.strip():
+            raise HTTPException(400, "Reason is required")
+        if not payload.receiver_name or not payload.receiver_name.strip():
+            raise HTTPException(400, "Receiver name is required")
 
-    if not payload.source or not payload.source.strip():
-        raise HTTPException(400, "Source is required (e.g., 'Opening Stock', 'Donation', 'Emergency')")
+        item = db.query(models.InventoryItem).filter(
+            models.InventoryItem.id == payload.item_id,
+            models.InventoryItem.is_deleted == False
+        ).first()
+        if not item:
+            raise HTTPException(404, "Item not found")
 
-    if not payload.reason or not payload.reason.strip():
-        raise HTTPException(400, "Reason is required (e.g., 'Initial inventory', 'Donated by...')")
+        notes = f"DIRECT_RECEIPT | Source: {payload.source.strip()} | Reason: {payload.reason.strip()}"
+        if payload.notes:
+            notes += f" | Notes: {payload.notes}"
 
-    if not payload.receiver_name or not payload.receiver_name.strip():
-        raise HTTPException(400, "Receiver name is required")
+        r = models.Receiving(
+            receiving_number=gen_receiving_number(db),
+            purchase_order_id=None,
+            purchase_order_item_id=None,
+            item_id=item.id,
+            quantity_received=qty,
+            receiver_name=payload.receiver_name.strip(),
+            status="Received",
+            notes=notes,
+        )
+        db.add(r)
+        db.flush()
 
-    # Validate item exists
-    item = db.query(models.InventoryItem).filter(
-        models.InventoryItem.id == payload.item_id,
-        models.InventoryItem.is_deleted == False
-    ).first()
-    if not item:
-        raise HTTPException(404, "Item not found")
+        record_movement(db, item, "IN", qty,
+                        "DIRECT_RECEIPT", r.id, user.id,
+                        f"Direct receipt {r.receiving_number}: {payload.source.strip()} - {payload.reason.strip()}")
 
-    # Create stock movement with DIRECT_RECEIPT source type
-    notes = f"Direct Receipt - Source: {payload.source}, Reason: {payload.reason}"
-    if payload.notes:
-        notes += f", Notes: {payload.notes}"
+        db.add(models.AuditLog(
+            user_id=user.id, action="direct_receipt", module="receiving",
+            record_id=r.id,
+            description=f"Direct receipt {r.receiving_number}: {qty} x {item.item_name} ({payload.source.strip()})"
+        ))
+        db.commit()
 
-    record_movement(
-        db, item, "IN", payload.quantity,
-        "DIRECT_RECEIPT", None, user.id, notes
-    )
-
-    db.commit()
-
-    # Create audit log
-    log_audit(
-        db, user.id, "direct_receipt", "inventory", item.id,
-        f"Direct receipt: {payload.quantity} x {item.item_name} - {payload.source}"
-    )
-
-    return {
-        "ok": True,
-        "item_code": item.item_code,
-        "item_name": item.item_name,
-        "quantity": payload.quantity,
-        "new_stock": item.stock_quantity,
-        "source": payload.source,
-        "reason": payload.reason
-    }
+        return {
+            "ok": True,
+            "id": r.id,
+            "receiving_number": r.receiving_number,
+            "item_code": item.item_code,
+            "item_name": item.item_name,
+            "quantity": qty,
+            "new_stock": item.stock_quantity,
+            "source": payload.source,
+            "reason": payload.reason
+        }
+    except Exception:
+        db.rollback()
+        raise
 
 
 # ============================================================
