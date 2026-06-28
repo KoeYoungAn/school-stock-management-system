@@ -180,7 +180,7 @@ When continuing:
 4. Do not scan the whole project.
 5. Do not modify unrelated modules.
 6. Do not reset database data.
-7. Fix PO status dropdown and backend validation.
+7. Fix PO status dropdown and backend validation (already fixed).
 8. Run backend tests.
 9. Run frontend build.
 10. Verify in browser.
