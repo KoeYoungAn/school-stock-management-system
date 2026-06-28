@@ -109,7 +109,7 @@ class PurchaseOrder(Base):
     supplier_id = Column(Integer, ForeignKey("suppliers.id"), nullable=False)
     order_date = Column(DateTime, default=_now)
     expected_delivery_date = Column(DateTime)
-    status = Column(String(30), default="Draft")  # Draft/Sent/Approved/Partially Received/Received
+    status = Column(String(30), default="Draft")  # Draft/Sent/Approved/Partially Received/Received/Cancelled/Closed
     notes = Column(Text)
     is_deleted = Column(Boolean, default=False)
     deleted_at = Column(DateTime)

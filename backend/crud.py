@@ -644,6 +644,8 @@ def list_pos(page: int = 1, limit: int = 20, search: str = "",
 @po_router.post("")
 def create_po(payload: schemas.POCreate, db: Session = Depends(get_db),
               user: models.User = Depends(require_staff)):
+    if payload.status in ("Cancelled", "Closed", "Partially Received", "Received"):
+        raise HTTPException(400, f"Cannot create a new PO with status '{payload.status}'")
     if user.role == STOREKEEPER and payload.status not in ("Draft", "Sent"):
         raise HTTPException(403, "Storekeeper can only create Draft or Sent")
     if payload.expected_delivery_date and payload.expected_delivery_date < datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0):
@@ -683,11 +685,25 @@ def update_po(pid: int, payload: schemas.POUpdate,
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == pid, models.PurchaseOrder.is_deleted == False).first()  # noqa
     if not po:
         raise HTTPException(404, "Not found")
+    if po.status in ("Cancelled", "Closed"):
+        raise HTTPException(400, f"Cannot edit a {po.status} Purchase Order")
     if user.role == STOREKEEPER and po.status not in ("Draft", "Sent"):
         raise HTTPException(403, "Storekeeper can only edit Draft or Sent POs")
+
+    items = po.items
+    total_ord = sum(i.quantity_ordered for i in items) if items else 0
+    total_rcv = sum(i.quantity_received or 0 for i in items) if items else 0
+
     for k, v in payload.dict(exclude_unset=True).items():
-        if k == "status" and user.role == STOREKEEPER and v not in ("Draft", "Sent"):
-            raise HTTPException(403, "Storekeeper cannot set this status")
+        if k == "status":
+            if user.role == STOREKEEPER and v not in ("Draft", "Sent"):
+                raise HTTPException(403, "Storekeeper cannot set this status")
+            if v == "Cancelled" and total_rcv > 0:
+                raise HTTPException(400, "Cannot cancel a PO after items have been received")
+            if v == "Closed" and total_rcv == 0:
+                raise HTTPException(400, "Cannot close a PO before any items have been received")
+            if v in ("Partially Received", "Received"):
+                raise HTTPException(400, f"Cannot manually set status to {v}. This is system-calculated.")
         setattr(po, k, v)
     db.commit()
     log_audit(db, user.id, "update", "purchase_orders", po.id, f"Updated PO {po.po_number}")
@@ -873,10 +889,14 @@ def _rcv_dict(r: models.Receiving) -> dict:
 
 
 def _refresh_po_status(db: Session, po_id: Optional[int]):
+    """System-calculated PO status: Received or Partially Received. Never modifies Cancelled/Closed."""
     if not po_id:
         return
     po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == po_id).first()
     if not po:
+        return
+    # System should never override Cancelled or Closed
+    if po.status in ("Cancelled", "Closed"):
         return
     items = po.items
     total_ord = sum(i.quantity_ordered for i in items) if items else 0
@@ -968,6 +988,8 @@ def create_rcv(payload: schemas.ReceivingCreate, db: Session = Depends(get_db),
         po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == payload.purchase_order_id).first()
         if not po:
             raise HTTPException(404, "Purchase order not found")
+        if po.status in ("Cancelled", "Closed"):
+            raise HTTPException(400, f"Cannot receive stock from {po.status} Purchase Orders")
         if po.status not in ("Approved", "Partially Received"):
             raise HTTPException(400, f"Purchase Order must be Approved or Partially Received (current status: {po.status})")
 

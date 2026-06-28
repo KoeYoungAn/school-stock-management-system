@@ -1,38 +1,117 @@
-# Work Session Notes - School Stock Management
+# Work Session Notes - School Stock Management System
 
-## Completed So Far
-- Reports page redesigned to remove dashboard analytics and use clean report-generator layout.
-- Added "Receive More" functionality with dedicated backend endpoint and frontend modal.
-- Implemented "Monthly Stock Summary Report" backend calculation and frontend UI with required filters.
-- Backend logic for stock movement delta and negative stock protection verified.
-- Improved frontend UI to clarify "Receive More" vs "Edit Receiving" workflows.
-- Fixed Monthly Stock Summary discrepancy so closing balances use the movement ledger `balance_after` source of truth.
-- Implemented Phase 5 official A4 report preview with metadata, remarks, signature blocks, print styling, and larger on-screen preview sizing.
-- Added optional report remarks input in the Reports control panel and passed remarks into the official preview/print layout.
-- Started and largely implemented Receiving workflow redesign: normal receiving now requires PO linkage, and a Direct Stock Receipt endpoint/UI flow was added for controlled manual/opening/donation stock receipts.
+## Last Completed Work
 
-## Current Working State
-- Reports page has dynamic filters, report-specific columns, official A4 preview layout, remarks support, and print-only report output styling.
-- Receive More flow allows adding inventory without overwriting old receiving records.
-- Monthly Stock Summary Report calculates opening/closing balances based on movements and matches ITM-010 live stock balance.
-- Receiving workflow has been separated into "Receive from PO" and "Direct Stock Receipt" concepts in backend/frontend code.
-- `.gitignore` is being added before first GitHub push to prevent local databases, env files, node_modules, dist/build artifacts, and virtual environments from being committed.
+### Receiving Workflow
+- Normal PO receiving was redesigned.
+- Top-level Receive More button was removed.
+- Receiving page now uses:
+  - Receive from PO
+  - Direct Stock Receipt
+- Receive from PO handles first receiving and additional partial receiving.
+- Direct Stock Receipt is separate from PO receiving.
+- Direct Stock Receipt is for:
+  - opening stock
+  - donation
+  - emergency receipt
+  - approved manual entry
+- Direct receipt requires source and reason.
+- Backend syntax check passed for:
+  - backend/crud.py
+  - backend/schemas.py
+- Frontend build passed after receiving workflow work.
 
-## Remaining to be Checked/Fixed
-- Finish verification of the Receiving workflow redesign after save: run backend receiving tests and frontend build, then manually test Receive from PO and Direct Stock Receipt screens.
-- Complete remaining report phases after Phase 5, especially export consistency and A4 export/print refinements.
-- Confirm Receiving Report and Stock Movement Report display wording for PO receiving vs Direct Receipt in the UI/export flow.
+### Reports Module
+- Reports page was redesigned from analytics layout to official report generator layout.
+- Old report cards and charts were removed.
+- Dynamic filters were added by report type.
+- Monthly Stock Summary Report was implemented.
+- A4-style preview was added.
+- Monthly report now shows:
+  - Month
+  - Report Period
+  - Opening Balance
+  - Total Received
+  - Total Assigned / Issued
+  - Total Returned
+  - Total Adjustment
+  - Closing Balance
+  - Status
 
-## Commands/Tests/Builds Run
-- `npm run build`: Successful (Frontend, before latest Receiving workflow changes).
-- `python test_receiving.py`: Passed (Backend Receiving, before latest Receiving workflow changes).
-- `python test_monthly_report.py` (simulated in turn): Verified metadata and balances.
-- Monthly Stock Summary calculation verified for ITM-010 (June 2026): closing balance 30 matches live stock.
+## Current Issue / Next Task
 
-## Known Issues
-- Latest Receiving workflow redesign has code changes that still need a fresh backend test run and frontend build verification after this save.
+### Purchase Order Status Rules
 
-## Next Steps
-- After pulling/resuming next time, run backend tests and frontend build first.
-- Continue Receiving workflow verification and report display cleanup before moving on to export consistency work.
-- Then proceed with remaining Phase 6+ report export consistency/A4 styling tasks.
+Need to fix Purchase Order status dropdown and backend status rules.
+
+Current problem:
+- New Purchase Order modal still shows Cancelled and Closed.
+- That is confusing because a new PO should not start as Cancelled or Closed.
+
+Required behavior:
+
+#### New Purchase Order modal
+Only show:
+- Draft
+- Sent
+- Approved
+
+Default:
+- Draft
+
+Do not show:
+- Cancelled
+- Closed
+- Partially Received
+- Received
+
+#### Edit Purchase Order modal
+Status options should depend on received quantity.
+
+If total received quantity = 0:
+- Draft
+- Sent
+- Approved
+- Cancelled
+
+If total received quantity > 0 and less than total ordered quantity:
+- Partially Received
+- Closed
+
+If total received quantity = total ordered quantity:
+- Received only, or status should be read-only as Received.
+
+#### Backend rules
+Backend must enforce:
+- Cannot create new PO as Cancelled or Closed.
+- Cannot cancel PO after any item has been received.
+- Can close partially received PO.
+- Cannot receive stock from Draft, Sent, Cancelled, Closed, or Received PO.
+- Can receive stock only from Approved or Partially Received PO.
+
+#### Important explanation
+Cancelled:
+- Use when PO has no received stock and the school decides not to continue.
+
+Closed:
+- Use when PO is partially received but the remaining items will not arrive.
+
+## Next Time Instructions
+
+When continuing:
+1. Read this file first.
+2. Run git status.
+3. Inspect only Purchase Order status logic.
+4. Do not scan the whole project.
+5. Do not modify unrelated modules.
+6. Do not reset database data.
+7. Fix PO status dropdown and backend validation.
+8. Run backend tests.
+9. Run frontend build.
+10. Verify in browser.
+
+## Commands to Run Next Time
+
+```bash
+git pull origin main
+git status

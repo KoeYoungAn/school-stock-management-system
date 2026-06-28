@@ -98,7 +98,7 @@ export default function PurchaseOrders() {
       <div className="flex gap-2">
         <button onClick={()=>setView(r)} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700" title={t('viewDetails', language)}><Eye className="w-4 h-4"/></button>
         {canEdit && <button onClick={()=>openEdit(r)} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700" title={t('edit', language)}><Pencil className="w-4 h-4"/></button>}
-        {canApprove && r.status!=='Approved' && r.status!=='Received' &&
+        {canApprove && r.status==='Draft' && r.status!=='Cancelled' && r.status!=='Closed' &&
           <button onClick={()=>approve(r.id)} className="p-1 text-emerald-600 rounded hover:bg-emerald-50 dark:hover:bg-emerald-900/30" title="Approve"><Check className="w-4 h-4"/></button>}
         {canDelete && <button onClick={()=>setDel(r)} className="p-1 text-red-600 rounded hover:bg-red-50 dark:hover:bg-red-900/30" title={t('delete', language)}><Trash2 className="w-4 h-4"/></button>}
       </div>
@@ -126,7 +126,27 @@ export default function PurchaseOrders() {
               error={errors.supplier_id} onBlur={e=>handleBlur('supplier_id', e.target.value)} required />
             <FormInput type="date" label={t('expectedDate', language)} value={form.expected_delivery_date} onChange={e=>setForm({...form,expected_delivery_date:e.target.value})}/>
             <SelectInput label={t('status', language)} value={form.status} onChange={e=>setForm({...form,status:e.target.value})}
-              options={user.role==='Storekeeper' ? ['Draft','Sent'] : PO_STATUSES}/>
+              options={
+                edit
+                  ? (() => {
+                      const received = edit.items.reduce((sum, i) => sum + i.quantity_received, 0)
+                      const ordered = edit.items.reduce((sum, i) => sum + i.quantity_ordered, 0)
+                      if (received === 0) return ['Draft','Sent','Approved','Cancelled']
+                      if (received < ordered) return ['Partially Received','Closed']
+                      return ['Received']
+                    })()
+                  : ['Draft','Sent','Approved']
+              }/>
+            {edit && (() => {
+              const received = edit.items.reduce((sum, i) => sum + i.quantity_received, 0)
+              const ordered = edit.items.reduce((sum, i) => sum + i.quantity_ordered, 0)
+              if (received === 0) {
+                return <p className="sm:col-span-2 text-xs text-gray-500 mt-1">“Cancelled is only available before any receiving.”</p>
+              } else if (received < ordered) {
+                return <p className="sm:col-span-2 text-xs text-gray-500 mt-1">“Closed is only available after partial receiving.”</p>
+              }
+              return null
+            })()}
           </div>
           {!edit && (
             <div className="border border-gray-200 dark:border-gray-700 rounded-lg p-3">
