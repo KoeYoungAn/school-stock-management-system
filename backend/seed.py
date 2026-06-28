@@ -7,6 +7,32 @@ from utils import hash_password
 def seed():
     db = SessionLocal()
     try:
+        # Seed units if they don't exist
+        if db.query(models.Unit).count() == 0:
+            units_data = [
+                ("piece", "pcs", "Individual piece or unit"),
+                ("unit", "unit", "Generic unit"),
+                ("box", "box", "Box or carton"),
+                ("pack", "pack", "Package or packet"),
+                ("dozen", "doz", "12 units"),
+                ("sheet", "sht", "Single sheet"),
+                ("ream", "rm", "500 sheets (standard)"),
+                ("bottle", "btl", "Bottle container"),
+                ("liter", "L", "Liter volume"),
+                ("gallon", "gal", "Gallon volume"),
+                ("set", "set", "Complete set"),
+                ("pair", "pair", "Pair of items"),
+                ("meter", "m", "Meter length"),
+                ("roll", "roll", "Roll"),
+            ]
+            units = []
+            for name, abbr, desc in units_data:
+                u = models.Unit(name=name, abbreviation=abbr, description=desc, is_active=True)
+                db.add(u)
+                units.append(u)
+            db.flush()
+            print(f"Seeded {len(units)} standard units.")
+
         if db.query(models.User).count() > 0:
             return
         # Users

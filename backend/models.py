@@ -60,6 +60,17 @@ class Department(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
 
+
+class Unit(Base):
+    __tablename__ = "units"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    abbreviation = Column(String(20))
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+
 class InventoryItem(Base):
     __tablename__ = "inventory_items"
     id = Column(Integer, primary_key=True, index=True)
@@ -67,6 +78,7 @@ class InventoryItem(Base):
     item_name = Column(String(200), nullable=False)
     category = Column(String(100))
     unit = Column(String(50), default="pcs")
+    base_unit_id = Column(Integer, ForeignKey("units.id"))
     supplier_id = Column(Integer, ForeignKey("suppliers.id"))
     stock_quantity = Column(Integer, default=0)
     minimum_stock = Column(Integer, default=0)
@@ -81,7 +93,23 @@ class InventoryItem(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     supplier = relationship("Supplier")
+    base_unit = relationship("Unit", foreign_keys=[base_unit_id])
+    conversions = relationship("ItemUnitConversion", back_populates="item")
 
+
+
+class ItemUnitConversion(Base):
+    __tablename__ = "item_unit_conversions"
+    id = Column(Integer, primary_key=True, index=True)
+    item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
+    purchase_unit_id = Column(Integer, ForeignKey("units.id"), nullable=False)
+    conversion_factor = Column(Integer, nullable=False)
+    is_default_purchase_unit = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=_now)
+    updated_at = Column(DateTime, default=_now, onupdate=_now)
+    
+    item = relationship("InventoryItem", back_populates="conversions")
+    purchase_unit = relationship("Unit")
 
 class AssignItem(Base):
     __tablename__ = "assign_items"

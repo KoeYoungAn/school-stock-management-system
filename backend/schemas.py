@@ -406,6 +406,77 @@ class AuditOut(BaseModel):
         from_attributes = True
 
 
+
+
+# ---------- Unit ----------
+class UnitBase(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+    abbreviation: Optional[str] = Field(None, max_length=20)
+    description: Optional[str] = None
+    is_active: bool = True
+
+    @field_validator('name')
+    @classmethod
+    def name_not_empty(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Unit name is required')
+        return v.strip()
+
+
+class UnitCreate(UnitBase):
+    pass
+
+
+class UnitUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, max_length=50)
+    abbreviation: Optional[str] = Field(None, max_length=20)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+class UnitOut(UnitBase):
+    id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+# ---------- Item Unit Conversion ----------
+class ConversionBase(BaseModel):
+    item_id: int
+    purchase_unit_id: int
+    conversion_factor: int = Field(gt=0)
+    is_default_purchase_unit: bool = False
+
+    @field_validator('conversion_factor')
+    @classmethod
+    def conversion_factor_positive(cls, v):
+        if v <= 0:
+            raise ValueError('Conversion factor must be greater than 0')
+        return v
+
+
+class ConversionCreate(ConversionBase):
+    pass
+
+
+class ConversionUpdate(BaseModel):
+    purchase_unit_id: Optional[int] = None
+    conversion_factor: Optional[int] = Field(None, gt=0)
+    is_default_purchase_unit: Optional[bool] = None
+
+
+class ConversionOut(ConversionBase):
+    id: int
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
 class ListResp(BaseModel):
     items: List[Any]
     total: int

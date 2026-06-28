@@ -171,3 +171,25 @@ def build_report_pdf(title: str, headers: list, rows: list, system_name: str,
     story.append(tbl)
     doc.build(story)
     return buf.getvalue()
+
+# ---------------- Unit conversion helper ----------------
+def get_conversion_factor(db: Session, item_id: int, unit_id: int) -> int:
+    """Get conversion factor for an item's unit.
+    Returns 1 if unit_id equals item's base_unit_id.
+    """
+    item = db.query(models.InventoryItem).filter(models.InventoryItem.id == item_id).first()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    
+    if unit_id == item.base_unit_id:
+        return 1
+    
+    conversion = db.query(models.ItemUnitConversion).filter(
+        models.ItemUnitConversion.item_id == item_id,
+        models.ItemUnitConversion.purchase_unit_id == unit_id
+    ).first()
+    
+    if not conversion:
+        raise HTTPException(400, f"No conversion found for this unit")
+    
+    return conversion.conversion_factor
