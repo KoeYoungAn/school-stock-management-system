@@ -2,191 +2,175 @@
 
 ## Last Completed Work (2026-06-28)
 
-### Report Date Range Filtering - COMPLETED ✓
+### Stock Management Units - PHASE 3 COMPLETE ✓
 
-Fixed inclusive date range filtering behavior across all report endpoints to ensure proper full-day coverage.
+**Implemented complete unit conversion system for school stock management.**
 
-#### Root Cause
-Backend date filtering used `created_at <= datetime.fromisoformat(date_to)`, which parsed date-only strings (e.g., "2026-06-26") as midnight (`2026-06-26 00:00:00`). This excluded all records after midnight on the end date, making single-day ranges (26-26) effectively return zero results instead of the full day.
+#### Phase 2: Database & Backend Foundation - COMPLETED ✓
 
-#### Backend Changes - 8 Endpoints Fixed
+**Database Changes:**
+- Created `units` table with 14 standard units (piece, unit, box, pack, dozen, sheet, ream, bottle, liter, gallon, set, pair, meter, roll)
+- Created `item_unit_conversions` table for purchase unit conversions
+- Added `base_unit_id` column to `inventory_items` table
+- Preserved old `unit` text field (no removal)
 
-**Fixed existing date filters (changed `<= date_to` to `< date_to + 1 day`):**
-1. `list_movements` (backend/crud.py ~line 1286) - Stock Movement listing
-2. `report_movements` (backend/crud.py ~line 1376) - Stock Movement report  
-3. `list_audit` (backend/crud.py ~line 1565) - Audit Log listing
+**Backend API Endpoints Added:**
+- `GET/POST/PUT/DELETE /api/units` - Unit CRUD operations
+- `GET/POST/PUT/DELETE /api/item-conversions` - Item conversion management
 
-**Added new date filtering:**
-4. `list_pos` (backend/crud.py ~line 629) - Purchase Order Report
-   - Added `date_from`, `date_to`, `date_filter_by` parameters
-   - Default: filter by `order_date`
-   - Optional: filter by `expected_delivery_date`
-   - Added validation: "Start date cannot be after end date"
-5. `list_rcv` (backend/crud.py ~line 919) - Receiving Report (filters by `date_received`)
-6. `list_returns` (backend/crud.py ~line 1189) - Returns Report (filters by `date_returned`)
-7. `list_assignments` (backend/crud.py ~line 498) - Department Usage Report (filters by `assigned_date`)
-8. `list_suppliers` (backend/crud.py ~line 213) - Supplier Report (filters by `created_at`)
+**Helper Functions:**
+- `get_conversion_factor(db, item_id, unit_id)` - Get conversion factor for unit
 
-#### Frontend Changes
+**Files Modified:**
+- `backend/models.py` - Added Unit, ItemUnitConversion models
+- `backend/schemas.py` - Added Unit and Conversion schemas
+- `backend/crud.py` - Added Units and Conversions API endpoints
+- `backend/utils.py` - Added `get_conversion_factor()` helper
+- `backend/seed.py` - Added units seeding
 
-**Modified `frontend/src/pages/Reports.jsx`:**
-1. Added `'dateFilterBy'` to `FILTER_CONFIG` for purchase-orders (line ~125)
-2. Updated `emptyFilters()` to initialize `dateFilterBy: 'order_date'` (line ~134)
-3. Added "Date Filter By" dropdown UI (lines ~240-250)
-   - "Filter by Order Date" (default)
-   - "Filter by Expected Date"
-4. Updated `buildParams()` to send `date_filter_by` parameter (line ~171)
+#### Phase 3A: Migration Analysis - COMPLETED ✓
 
-#### New Inclusive Date Logic
+**Migration Analysis:**
+- Analyzed 9 inventory items
+- 8 items: auto-safe (pcs → piece, no stock change)
+- 1 item (ITM-009 notebook): requires admin approval for box → piece conversion
 
-```python
-# For end_date - CRITICAL FIX:
-date_obj_to = datetime.fromisoformat(date_to)      # e.g., 2026-06-26 00:00:00
-next_day = date_obj_to + timedelta(days=1)         # e.g., 2026-06-27 00:00:00
-q = q.filter(Model.datetime_field < next_day)      # Includes all of 2026-06-26
-```
+**Files Created:**
+- `backend/migration_analysis_phase3a.py` - Migration analysis script
+- `backend/unit_migration_review.csv` - Migration review report
 
-**Why `< (end_date + 1 day)` instead of `<= end_date`:**
-- `<= 2026-06-26 00:00:00` → Only midnight records
-- `< 2026-06-27 00:00:00` → All of June 26 (00:00:00 to 23:59:59.999999)
+#### Phase 3B: Data Migration - COMPLETED ✓
 
-#### Test Results
+**Migration Execution:**
 
-**Created `backend/test_po_date_range.py` - 9 tests:**
-- ✓ Filter by order_date (default)
-- ✓ Filter by expected_delivery_date  
-- ✓ Single day inclusive (26-26 returns all of day 26)
-- ✓ Two consecutive days (26-27 returns days 26 and 27)
-- ✓ Date range validation (start > end rejected with error message)
-- ✓ Empty results handled correctly
-- **Result: 9/9 PASSED**
+**ITM-009 (notebook) - Admin Approved Migration:**
+| Field | Value |
+|-------|-------|
+| Old Unit | box |
+| New Base Unit | piece |
+| Purchase Unit | box |
+| Conversion Factor | 1 box = 10 pieces |
+| Old Stock | 11 boxes |
+| New Stock | 110 pieces |
 
-**Existing `backend/test_reports_date_range.py` - 7 tests:**
-- ✓ Stock movement date filtering still works correctly
-- ✓ Single day inclusive verified
-- ✓ Date range filtering verified
-- **Result: 7/7 PASSED**
+**Auto-Safe Migrations (8 items):**
+- ITM-003 (Office Chair): pcs → piece, stock 5 unchanged
+- ITM-004 (Laptop Mouse): pcs → piece, stock 35 unchanged
+- ITM-005 (Basketball): pcs → piece, stock 6 unchanged
+- ITM-006 (Projector Cable): pcs → piece, stock 15 unchanged
+- ITM-007 (monitor): pcs → piece, stock 13 unchanged
+- ITM-008 (keyboard): pcs → piece, stock 20 unchanged
+- ITM-010 (pens): pcs → piece, stock 36 unchanged
+- ITM-016 (Marker): pcs → piece, stock 57 unchanged
 
-#### Build Verification
+**Verification:**
+- ✅ All items have `base_unit_id` set
+- ✅ ITM-009 stock verified as 110 pieces
+- ✅ ITM-009 conversion: box = 10 pieces created
+- ✅ Old `unit` field preserved
+- ✅ Database backup: `backend/school_stock.db.backup_20260628_230551`
 
-```bash
-# Backend compilation
-python -m py_compile backend/crud.py backend/schemas.py
-✓ No errors
-
-# Backend tests
-python test_po_date_range.py
-✓ 9/9 tests passed
-
-python test_reports_date_range.py  
-✓ 7/7 tests passed
-
-# Frontend build
-npm run build
-✓ Built successfully (3.86s, 347.80 kB)
-```
-
-#### Database Status
-✓ No database data was modified, reset, or deleted
-✓ All tests used in-memory databases only
-✓ Production data preserved
-
-#### Example Usage
-
-**Purchase Order Report - Single Day:**
-```
-GET /api/purchase-orders?date_from=2026-06-26&date_to=2026-06-26&date_filter_by=order_date&limit=500
-```
-Returns all POs with order_date on June 26, 2026 (entire day).
-
-**Purchase Order Report - Date Range:**
-```
-GET /api/purchase-orders?date_from=2026-06-26&date_to=2026-06-27&date_filter_by=order_date&limit=500
-```
-Returns all POs with order_date on June 26 or June 27, 2026.
-
-**Stock Movement Report:**
-```
-GET /api/reports/stock-movements?date_from=2026-06-26&date_to=2026-06-26&limit=500
-```
-Returns all movements created on June 26, 2026 (entire day).
+**Files Created:**
+- `backend/migrate_phase3b.py` - Migration execution script
+- `backend/test_phase3a_migration.py` - Backend tests for Phase 3A
 
 ---
 
 ## Previous Completed Work
 
-### Purchase Order Status Rules (2026-06-28)
+### Report Date Range Filtering - COMPLETED ✓
+
+Fixed inclusive date range filtering behavior across all report endpoints to ensure proper full-day coverage.
+
+**Root Cause:**
+Backend date filtering used `created_at <= datetime.fromisoformat(date_to)`, which parsed date-only strings as midnight, excluding all records after midnight on the end date.
+
+**Backend Changes - 8 Endpoints Fixed:**
+1. `list_movements` - Stock Movement listing
+2. `report_movements` - Stock Movement report
+3. `list_audit` - Audit Log listing
+4. `list_pos` - Purchase Order Report (added `date_filter_by` parameter)
+5. `list_rcv` - Receiving Report
+6. `list_returns` - Returns Report
+7. `list_assignments` - Department Usage Report
+8. `list_suppliers` - Supplier Report
+
+**New Inclusive Date Logic:**
+```python
+# For end_date - CRITICAL FIX:
+next_day = date_obj_to + timedelta(days=1)
+q = q.filter(Model.datetime_field < next_day)  # Includes all of end date
+```
+
+**Test Results:**
+- `backend/test_po_date_range.py` - 9/9 PASSED
+- `backend/test_reports_date_range.py` - 7/7 PASSED
+
+---
+
+### Purchase Order Status Rules - COMPLETED ✓
 
 Fixed Purchase Order status dropdown and backend status rules.
 
-Current problem:
-- New Purchase Order modal still shows Cancelled and Closed.
-- That is confusing because a new PO should not start as Cancelled or Closed.
+**Backend Rules:**
+- Cannot create new PO as Cancelled or Closed
+- Cannot cancel PO after any item has been received
+- Can close partially received PO
+- Can receive stock only from Approved or Partially Received PO
 
-Required behavior:
+**PO Status Workflow:**
+- New PO: Draft, Sent, Approved only
+- No received items: Draft, Sent, Approved, Cancelled
+- Partially received: Partially Received, Closed
+- Fully received: Received only
 
-#### New Purchase Order modal
-Only show:
-- Draft
-- Sent
-- Approved
-
-Default:
-- Draft
-
-Do not show:
-- Cancelled
-- Closed
-- Partially Received
-- Received
-
-#### Edit Purchase Order modal
-Status options should depend on received quantity.
-
-If total received quantity = 0:
-- Draft
-- Sent
-- Approved
-- Cancelled
-
-If total received quantity > 0 and less than total ordered quantity:
-- Partially Received
-- Closed
-
-If total received quantity = total ordered quantity:
-- Received only, or status should be read-only as Received.
-
-#### Backend rules
-Backend must enforce:
-- Cannot create new PO as Cancelled or Closed.
-- Cannot cancel PO after any item has been received.
-- Can close partially received PO.
-- Cannot receive stock from Draft, Sent, Cancelled, Closed, or Received PO.
-- Can receive stock only from Approved or Partially Received PO.
-
-#### Important explanation
-Cancelled:
-- Use when PO has no received stock and the school decides not to continue.
-
-Closed:
-- Use when PO is partially received but the remaining items will not arrive.
+---
 
 ## Next Time Instructions
 
 When continuing:
-1. Read this file first.
-2. Run git status.
-3. Inspect only Purchase Order status logic.
-4. Do not scan the whole project.
-5. Do not modify unrelated modules.
-6. Do not reset database data.
-7. Fix PO status dropdown and backend validation (already fixed).
-8. Run backend tests.
-9. Run frontend build.
-10. Verify in browser.
+1. Read this file first
+2. Run git status
+3. Proceed with Phase 4: Receiving/PO logic updates (or await approval)
+
+---
 
 ## Commands to Run Next Time
 
 ```bash
 git pull origin main
 git status
+```
+
+## Milestones
+
+- [x] Phase 1: Audit & Implementation Plan
+- [x] Phase 2: Database & Backend Foundation
+- [x] Phase 3A: Migration Analysis & Review
+- [x] Phase 3B: Data Migration Execution
+- [ ] Phase 4: Update Receiving, PO, Assignments, Returns, Reports
+
+---
+
+## Database Schema Summary
+
+### New Tables
+- **units**: id, name, abbreviation, description, is_active, created_at, updated_at
+- **item_unit_conversions**: id, item_id, purchase_unit_id, conversion_factor, is_default_purchase_unit, created_at, updated_at
+
+### Modified Tables
+- **inventory_items**: Added `base_unit_id` column (nullable)
+
+---
+
+## Migration Notes
+
+### Stock Calculation Rules
+- Stock is stored in base unit
+- Conversion factor: `base_quantity = purchase_quantity × conversion_factor`
+- Example: 5 boxes × 10 pieces/box = 50 pieces
+
+### ITM-009 (notebook) Migration
+- Admin confirmed: 1 box = 10 pieces
+- Migration: 11 boxes → 110 pieces
+- Conversion: box = 10 pieces
