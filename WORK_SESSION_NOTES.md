@@ -1,48 +1,123 @@
 # Work Session Notes - School Stock Management System
 
-## Last Completed Work
+## Last Completed Work (2026-06-28)
 
-### Receiving Workflow
-- Normal PO receiving was redesigned.
-- Top-level Receive More button was removed.
-- Receiving page now uses:
-  - Receive from PO
-  - Direct Stock Receipt
-- Receive from PO handles first receiving and additional partial receiving.
-- Direct Stock Receipt is separate from PO receiving.
-- Direct Stock Receipt is for:
-  - opening stock
-  - donation
-  - emergency receipt
-  - approved manual entry
-- Direct receipt requires source and reason.
-- Backend syntax check passed for:
-  - backend/crud.py
-  - backend/schemas.py
-- Frontend build passed after receiving workflow work.
+### Report Date Range Filtering - COMPLETED ✓
 
-### Reports Module
-- Reports page was redesigned from analytics layout to official report generator layout.
-- Old report cards and charts were removed.
-- Dynamic filters were added by report type.
-- Monthly Stock Summary Report was implemented.
-- A4-style preview was added.
-- Monthly report now shows:
-  - Month
-  - Report Period
-  - Opening Balance
-  - Total Received
-  - Total Assigned / Issued
-  - Total Returned
-  - Total Adjustment
-  - Closing Balance
-  - Status
+Fixed inclusive date range filtering behavior across all report endpoints to ensure proper full-day coverage.
 
-## Current Issue / Next Task
+#### Root Cause
+Backend date filtering used `created_at <= datetime.fromisoformat(date_to)`, which parsed date-only strings (e.g., "2026-06-26") as midnight (`2026-06-26 00:00:00`). This excluded all records after midnight on the end date, making single-day ranges (26-26) effectively return zero results instead of the full day.
 
-### Purchase Order Status Rules
+#### Backend Changes - 8 Endpoints Fixed
 
-Need to fix Purchase Order status dropdown and backend status rules.
+**Fixed existing date filters (changed `<= date_to` to `< date_to + 1 day`):**
+1. `list_movements` (backend/crud.py ~line 1286) - Stock Movement listing
+2. `report_movements` (backend/crud.py ~line 1376) - Stock Movement report  
+3. `list_audit` (backend/crud.py ~line 1565) - Audit Log listing
+
+**Added new date filtering:**
+4. `list_pos` (backend/crud.py ~line 629) - Purchase Order Report
+   - Added `date_from`, `date_to`, `date_filter_by` parameters
+   - Default: filter by `order_date`
+   - Optional: filter by `expected_delivery_date`
+   - Added validation: "Start date cannot be after end date"
+5. `list_rcv` (backend/crud.py ~line 919) - Receiving Report (filters by `date_received`)
+6. `list_returns` (backend/crud.py ~line 1189) - Returns Report (filters by `date_returned`)
+7. `list_assignments` (backend/crud.py ~line 498) - Department Usage Report (filters by `assigned_date`)
+8. `list_suppliers` (backend/crud.py ~line 213) - Supplier Report (filters by `created_at`)
+
+#### Frontend Changes
+
+**Modified `frontend/src/pages/Reports.jsx`:**
+1. Added `'dateFilterBy'` to `FILTER_CONFIG` for purchase-orders (line ~125)
+2. Updated `emptyFilters()` to initialize `dateFilterBy: 'order_date'` (line ~134)
+3. Added "Date Filter By" dropdown UI (lines ~240-250)
+   - "Filter by Order Date" (default)
+   - "Filter by Expected Date"
+4. Updated `buildParams()` to send `date_filter_by` parameter (line ~171)
+
+#### New Inclusive Date Logic
+
+```python
+# For end_date - CRITICAL FIX:
+date_obj_to = datetime.fromisoformat(date_to)      # e.g., 2026-06-26 00:00:00
+next_day = date_obj_to + timedelta(days=1)         # e.g., 2026-06-27 00:00:00
+q = q.filter(Model.datetime_field < next_day)      # Includes all of 2026-06-26
+```
+
+**Why `< (end_date + 1 day)` instead of `<= end_date`:**
+- `<= 2026-06-26 00:00:00` → Only midnight records
+- `< 2026-06-27 00:00:00` → All of June 26 (00:00:00 to 23:59:59.999999)
+
+#### Test Results
+
+**Created `backend/test_po_date_range.py` - 9 tests:**
+- ✓ Filter by order_date (default)
+- ✓ Filter by expected_delivery_date  
+- ✓ Single day inclusive (26-26 returns all of day 26)
+- ✓ Two consecutive days (26-27 returns days 26 and 27)
+- ✓ Date range validation (start > end rejected with error message)
+- ✓ Empty results handled correctly
+- **Result: 9/9 PASSED**
+
+**Existing `backend/test_reports_date_range.py` - 7 tests:**
+- ✓ Stock movement date filtering still works correctly
+- ✓ Single day inclusive verified
+- ✓ Date range filtering verified
+- **Result: 7/7 PASSED**
+
+#### Build Verification
+
+```bash
+# Backend compilation
+python -m py_compile backend/crud.py backend/schemas.py
+✓ No errors
+
+# Backend tests
+python test_po_date_range.py
+✓ 9/9 tests passed
+
+python test_reports_date_range.py  
+✓ 7/7 tests passed
+
+# Frontend build
+npm run build
+✓ Built successfully (3.86s, 347.80 kB)
+```
+
+#### Database Status
+✓ No database data was modified, reset, or deleted
+✓ All tests used in-memory databases only
+✓ Production data preserved
+
+#### Example Usage
+
+**Purchase Order Report - Single Day:**
+```
+GET /api/purchase-orders?date_from=2026-06-26&date_to=2026-06-26&date_filter_by=order_date&limit=500
+```
+Returns all POs with order_date on June 26, 2026 (entire day).
+
+**Purchase Order Report - Date Range:**
+```
+GET /api/purchase-orders?date_from=2026-06-26&date_to=2026-06-27&date_filter_by=order_date&limit=500
+```
+Returns all POs with order_date on June 26 or June 27, 2026.
+
+**Stock Movement Report:**
+```
+GET /api/reports/stock-movements?date_from=2026-06-26&date_to=2026-06-26&limit=500
+```
+Returns all movements created on June 26, 2026 (entire day).
+
+---
+
+## Previous Completed Work
+
+### Purchase Order Status Rules (2026-06-28)
+
+Fixed Purchase Order status dropdown and backend status rules.
 
 Current problem:
 - New Purchase Order modal still shows Cancelled and Closed.

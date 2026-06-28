@@ -122,7 +122,7 @@ const FILTER_CONFIG = {
   'low-stock': ['category'],
   'out-of-stock': ['category'],
   'stock-movements': ['dateFrom', 'dateTo', 'movementType'],
-  'purchase-orders': ['dateFrom', 'dateTo', 'status'],
+  'purchase-orders': ['dateFrom', 'dateTo', 'status', 'dateFilterBy'],
   'receiving': ['dateFrom', 'dateTo', 'status'],
   'returns': ['dateFrom', 'dateTo'],
   'department-usage': ['dateFrom', 'dateTo'],
@@ -131,7 +131,7 @@ const FILTER_CONFIG = {
 }
 
 const getReportColumns = (reportType) => REPORT_COLUMNS[reportType] || REPORT_COLUMNS['inventory-summary']
-const emptyFilters = () => ({ category: '', status: '', dateFrom: '', dateTo: '', movementType: '', monthYear: '' })
+const emptyFilters = () => ({ category: '', status: '', dateFrom: '', dateTo: '', movementType: '', monthYear: '', dateFilterBy: 'order_date' })
 const formatCell = (key, value) => {
   if (value === null || value === undefined || value === '') return '—'
   if (key.includes('date') || key === 'created_at') return fmtDate(value)
@@ -168,6 +168,7 @@ export default function Reports() {
     if (selectedReport.fixedStatus) params.status = selectedReport.fixedStatus
     if (requiredFilters.includes('dateFrom') && filters.dateFrom) params.date_from = filters.dateFrom
     if (requiredFilters.includes('dateTo') && filters.dateTo) params.date_to = filters.dateTo
+    if (requiredFilters.includes('dateFilterBy') && filters.dateFilterBy) params.date_filter_by = filters.dateFilterBy
     if (requiredFilters.includes('movementType') && filters.movementType) params.movement_type = filters.movementType
     if (requiredFilters.includes('monthYear') && filters.monthYear) {
       const [year, month] = filters.monthYear.split('-')
@@ -239,6 +240,13 @@ export default function Reports() {
 
           {requiredFilters.includes('dateTo') && (
             <input type="date" value={filters.dateTo} onChange={e => setFilters(f => ({ ...f, dateTo: e.target.value }))} className="px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900" />
+          )}
+
+          {requiredFilters.includes('dateFilterBy') && (
+            <select value={filters.dateFilterBy} onChange={e => setFilters(f => ({ ...f, dateFilterBy: e.target.value }))} className="px-4 py-3 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900">
+              <option value="order_date">Filter by Order Date</option>
+              <option value="expected_delivery_date">Filter by Expected Date</option>
+            </select>
           )}
 
           {requiredFilters.includes('movementType') && (

@@ -212,9 +212,35 @@ sup_router = APIRouter(prefix="/api/suppliers", tags=["suppliers"])
 @sup_router.get("")
 def list_suppliers(page: int = 1, limit: int = 20, search: str = "",
                    status: Optional[str] = None,
+                   date_from: Optional[str] = None, date_to: Optional[str] = None,
                    db: Session = Depends(get_db),
                    _: models.User = Depends(get_current_user)):
     q = db.query(models.Supplier).filter(models.Supplier.is_deleted == False)  # noqa
+
+    # Date range validation
+    if date_from and date_to:
+        try:
+            start_date_obj = datetime.fromisoformat(date_from)
+            end_date_obj = datetime.fromisoformat(date_to)
+            if start_date_obj > end_date_obj:
+                raise HTTPException(400, "Start date cannot be after end date.")
+        except ValueError:
+            raise HTTPException(400, "Invalid date format for date_from or date_to.")
+
+    if date_from:
+        try:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.Supplier.created_at >= date_obj_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.Supplier.created_at < next_day)
+        except ValueError:
+            pass
+
     if search:
         like = f"%{search}%"
         q = q.filter(or_(models.Supplier.supplier_name.ilike(like),
@@ -498,9 +524,35 @@ def _asn_dict(a: models.AssignItem) -> dict:
 @asn_router.get("")
 def list_assignments(page: int = 1, limit: int = 20, search: str = "",
                      status: Optional[str] = None,
+                     date_from: Optional[str] = None, date_to: Optional[str] = None,
                      db: Session = Depends(get_db),
                      user: models.User = Depends(get_current_user)):
     q = db.query(models.AssignItem)
+
+    # Date range validation
+    if date_from and date_to:
+        try:
+            start_date_obj = datetime.fromisoformat(date_from)
+            end_date_obj = datetime.fromisoformat(date_to)
+            if start_date_obj > end_date_obj:
+                raise HTTPException(400, "Start date cannot be after end date.")
+        except ValueError:
+            raise HTTPException(400, "Invalid date format for date_from or date_to.")
+
+    if date_from:
+        try:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.AssignItem.assigned_date >= date_obj_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.AssignItem.assigned_date < next_day)
+        except ValueError:
+            pass
+
     if user.role == TEACHER:
         q = q.filter(models.AssignItem.assigned_user_id == user.id)
     if search:
@@ -628,9 +680,45 @@ def _po_dict(po: models.PurchaseOrder) -> dict:
 @po_router.get("")
 def list_pos(page: int = 1, limit: int = 20, search: str = "",
              status: Optional[str] = None,
+             date_from: Optional[str] = None, date_to: Optional[str] = None,
+             date_filter_by: str = Query("order_date", pattern="^(order_date|expected_delivery_date)$"),
              db: Session = Depends(get_db),
              _: models.User = Depends(get_current_user)):
+
     q = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.is_deleted == False)  # noqa
+
+    # Date range validation
+    if date_from and date_to:
+        try:
+            start_date_obj = datetime.fromisoformat(date_from)
+            end_date_obj = datetime.fromisoformat(date_to)
+            if start_date_obj > end_date_obj:
+                raise HTTPException(400, "Start date cannot be after end date.")
+        except ValueError:
+            raise HTTPException(400, "Invalid date format for date_from or date_to.")
+
+    # Apply date filtering based on date_filter_by
+    if date_from:
+        try:
+            date_obj_from = datetime.fromisoformat(date_from)
+            if date_filter_by == "order_date":
+                q = q.filter(models.PurchaseOrder.order_date >= date_obj_from)
+            elif date_filter_by == "expected_delivery_date":
+                q = q.filter(models.PurchaseOrder.expected_delivery_date >= date_obj_from)
+        except ValueError:
+            pass # Invalid date format, ignored as per current pattern in other filters
+
+    if date_to:
+        try:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            if date_filter_by == "order_date":
+                q = q.filter(models.PurchaseOrder.order_date < next_day)
+            elif date_filter_by == "expected_delivery_date":
+                q = q.filter(models.PurchaseOrder.expected_delivery_date < next_day)
+        except ValueError:
+            pass # Invalid date format, ignored as per current pattern in other filters
+
     if search:
         q = q.filter(models.PurchaseOrder.po_number.ilike(f"%{search}%"))
     if status:
@@ -814,6 +902,13 @@ def receive_more(poi_id: int, payload: schemas.ReceiveMoreRequest,
     if not poi:
         raise HTTPException(404, "Purchase order item not found")
 
+    # 1.5. Find associated Purchase Order and validate its status
+    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == poi.purchase_order_id).first()
+    if not po:
+        raise HTTPException(404, "Associated Purchase Order not found")
+    if po.status not in ("Approved", "Partially Received"):
+        raise HTTPException(400, f"Cannot receive stock for a Purchase Order with status '{po.status}'. Only Approved or Partially Received purchase orders can receive stock.")
+
     # 2. Validate
     if payload.additional_quantity <= 0:
         raise HTTPException(400, "Additional quantity must be positive")
@@ -911,9 +1006,35 @@ def _refresh_po_status(db: Session, po_id: Optional[int]):
 @rcv_router.get("")
 def list_rcv(page: int = 1, limit: int = 20, search: str = "",
              status: Optional[str] = None,
+             date_from: Optional[str] = None, date_to: Optional[str] = None,
              db: Session = Depends(get_db),
              _: models.User = Depends(require_staff)):
     q = db.query(models.Receiving)
+
+    # Date range validation
+    if date_from and date_to:
+        try:
+            start_date_obj = datetime.fromisoformat(date_from)
+            end_date_obj = datetime.fromisoformat(date_to)
+            if start_date_obj > end_date_obj:
+                raise HTTPException(400, "Start date cannot be after end date.")
+        except ValueError:
+            raise HTTPException(400, "Invalid date format for date_from or date_to.")
+
+    if date_from:
+        try:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.Receiving.date_received >= date_obj_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.Receiving.date_received < next_day)
+        except ValueError:
+            pass
+
     if search:
         q = q.filter(models.Receiving.receiving_number.ilike(f"%{search}%"))
     if status:
@@ -1180,9 +1301,35 @@ def _ret_dict(r: models.ReturnRecord) -> dict:
 
 @ret_router.get("")
 def list_returns(page: int = 1, limit: int = 20, search: str = "",
+                 date_from: Optional[str] = None, date_to: Optional[str] = None,
                  db: Session = Depends(get_db),
                  _: models.User = Depends(require_staff)):
     q = db.query(models.ReturnRecord)
+
+    # Date range validation
+    if date_from and date_to:
+        try:
+            start_date_obj = datetime.fromisoformat(date_from)
+            end_date_obj = datetime.fromisoformat(date_to)
+            if start_date_obj > end_date_obj:
+                raise HTTPException(400, "Start date cannot be after end date.")
+        except ValueError:
+            raise HTTPException(400, "Invalid date format for date_from or date_to.")
+
+    if date_from:
+        try:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.ReturnRecord.date_returned >= date_obj_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.ReturnRecord.date_returned < next_day)
+        except ValueError:
+            pass
+
     if search:
         q = q.filter(models.ReturnRecord.return_number.ilike(f"%{search}%"))
     q = q.order_by(models.ReturnRecord.id.desc())
@@ -1278,14 +1425,18 @@ def list_movements(page: int = 1, limit: int = 20, search: str = "",
         q = q.filter(models.StockMovement.movement_type == movement_type)
     if date_from:
         try:
-            q = q.filter(models.StockMovement.created_at >= datetime.fromisoformat(date_from))
-        except Exception:
-            pass
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.StockMovement.created_at >= date_obj_from)
+        except ValueError:
+            pass # Invalid date format
     if date_to:
         try:
-            q = q.filter(models.StockMovement.created_at <= datetime.fromisoformat(date_to))
-        except Exception:
-            pass
+            date_obj_to = datetime.fromisoformat(date_to)
+            # Add one day to the end date for inclusive filtering of the whole day
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.StockMovement.created_at < next_day)
+        except ValueError:
+            pass # Invalid date format
     q = q.order_by(models.StockMovement.id.desc())
     items, total = paginate(q, page, limit)
     return {"items": [{
@@ -1368,13 +1519,16 @@ def report_movements(date_from: Optional[str] = None, date_to: Optional[str] = N
         q = q.filter(models.StockMovement.movement_type == movement_type)
     if date_from:
         try:
-            q = q.filter(models.StockMovement.created_at >= datetime.fromisoformat(date_from))
-        except Exception:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.StockMovement.created_at >= date_obj_from)
+        except ValueError:
             pass
     if date_to:
         try:
-            q = q.filter(models.StockMovement.created_at <= datetime.fromisoformat(date_to))
-        except Exception:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.StockMovement.created_at < next_day)
+        except ValueError:
             pass
     rows = q.order_by(models.StockMovement.id.desc()).limit(500).all()
     return {"items": [{
@@ -1557,13 +1711,16 @@ def list_audit(page: int = 1, limit: int = 20, search: str = "",
         q = q.filter(models.AuditLog.description.ilike(f"%{search}%"))
     if date_from:
         try:
-            q = q.filter(models.AuditLog.created_at >= datetime.fromisoformat(date_from))
-        except Exception:
+            date_obj_from = datetime.fromisoformat(date_from)
+            q = q.filter(models.AuditLog.created_at >= date_obj_from)
+        except ValueError:
             pass
     if date_to:
         try:
-            q = q.filter(models.AuditLog.created_at <= datetime.fromisoformat(date_to))
-        except Exception:
+            date_obj_to = datetime.fromisoformat(date_to)
+            next_day = date_obj_to + timedelta(days=1)
+            q = q.filter(models.AuditLog.created_at < next_day)
+        except ValueError:
             pass
     q = q.order_by(models.AuditLog.id.desc())
     items, total = paginate(q, page, limit)
