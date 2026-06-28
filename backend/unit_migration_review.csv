@@ -1,0 +1,10 @@
+item_id,item_code,item_name,category,current_old_unit,current_stock_quantity,proposed_base_unit,proposed_base_unit_id,migration_confidence,migration_note,current_base_unit_id
+3,ITM-003,Office Chair,Furniture,pcs,5,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+4,ITM-004,Laptop Mouse,ICT,pcs,35,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+5,ITM-005,Basketball,Sports,pcs,6,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+6,ITM-006,Projector Cable,ICT,pcs,15,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+7,ITM-007,monitor,ICT,pcs,13,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+8,ITM-008,keyboard,Stationery,pcs,20,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+9,ITM-009,notebook,Stationery,box,11,piece,1,review,Purchase unit - confirm conversion factor,NULL
+10,ITM-010,pens,Stationery,pcs,36,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
+16,ITM-016,Marker,Stationery,pcs,57,piece,1,auto,"Safe mapping: pcs → piece, no stock change",NULL
