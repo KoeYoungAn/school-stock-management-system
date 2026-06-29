@@ -19,10 +19,11 @@ import { Plus, Pencil, Trash2, Search, Eye } from 'lucide-react'
 import { useValidation } from '../hooks/useValidation.js'
 import { required, minLength, minValue } from '../utils/validation.js'
 
-const blank = { item_name:'', category:'Stationery', unit:'pcs', supplier_id:'', stock_quantity:0, minimum_stock:0, storage_location:'', condition:'Good', notes:'' }
+const blank = { item_name:'', category:'Stationery', base_unit_id:'', supplier_id:'', stock_quantity:0, minimum_stock:0, storage_location:'', condition:'Good', notes:'', conversions:[] }
 
 const inventorySchema = {
   item_name: [required('Item Name'), minLength(2, 'Item Name')],
+  base_unit_id: [required('Base Unit')],
   stock_quantity: [required('Initial Stock'), minValue(0, 'Initial Stock')],
   minimum_stock: [required('Minimum Stock'), minValue(0, 'Minimum Stock')]
 }
@@ -41,6 +42,7 @@ export default function Inventory() {
   const [del, setDel] = useState(null)
   const [viewDetail, setViewDetail] = useState(null)
   const [suppliers, setSuppliers] = useState([])
+  const [units, setUnits] = useState([])
   const { errors, validateAll, handleBlur, clearErrors, hasErrors } = useValidation(inventorySchema)
 
   const load = async () => {
@@ -51,12 +53,20 @@ export default function Inventory() {
     } catch (e) { toast.error(errMsg(e)) } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [page, limit, status, category])
-  useEffect(() => { api.get('/api/suppliers?limit=200').then(r => setSuppliers(r.data.items)).catch(()=>{}) }, [])
+  useEffect(() => {
+    api.get('/api/suppliers?limit=200').then(r => setSuppliers(r.data.items)).catch(()=>{})
+    api.get('/api/units?limit=200').then(r => setUnits(r.data.items)).catch(()=>{})
+  }, [])
 
   const openNew = () => { setEdit(null); setForm(blank); setImgFile(null); clearErrors(); setOpen(true) }
   const openEdit = (r) => {
     setEdit(r)
-    setForm({ ...r, supplier_id: r.supplier_id || '' })
+    setForm({
+      ...r,
+      supplier_id: r.supplier_id || '',
+      base_unit_id: r.base_unit_id || '',
+      conversions: r.conversions || []
+    })
     setImgFile(null); clearErrors(); setOpen(true)
   }
   const submit = async (e) => {
@@ -67,7 +77,12 @@ export default function Inventory() {
       const fd = new FormData()
       Object.entries(form).forEach(([k,v]) => {
         if (edit && k === 'stock_quantity') return
-        if (v !== null && v !== undefined) fd.append(k, v)
+        if (k === 'conversions') {
+          // Send conversions as JSON string
+          fd.append(k, JSON.stringify(v || []))
+        } else if (v !== null && v !== undefined) {
+          fd.append(k, v)
+        }
       })
       if (imgFile) fd.append('image', imgFile)
       if (edit) await api.put(`/api/inventory/${edit.id}`, fd)
@@ -91,7 +106,7 @@ export default function Inventory() {
     { key:'item_code', label:t('code', language) },
     { key:'item_name', label:t('item', language) },
     { key:'category', label:t('category', language) },
-    { key:'unit', label:t('unit', language) },
+    { key:'base_unit', label:t('unit', language), render:r => r.base_unit ? r.base_unit.name : (r.unit || '—') },
     { key:'stock_quantity', label:t('stock', language) },
     { key:'minimum_stock', label:t('min', language) },
     { key:'stock_status', label:t('status', language), render:r => <StatusBadge value={r.stock_status} /> },
@@ -147,7 +162,8 @@ export default function Inventory() {
             error={errors.item_name} onBlur={e=>handleBlur('item_name', e.target.value)}/>
           <SelectInput label={t('category', language)} value={form.category} onChange={e=>setForm({...form,category:e.target.value})}
             options={ITEM_CATEGORIES} />
-          <FormInput label={t('unit', language)} value={form.unit} onChange={e=>setForm({...form,unit:e.target.value})}/>
+          <SelectInput label={t('baseUnit', language)} value={form.base_unit_id} onChange={e=>setForm({...form,base_unit_id:Number(e.target.value)})}
+            options={units.map(u=>({value:u.id,label:`${u.name} (${u.abbreviation})`}))} error={errors.base_unit_id} />
           <SelectInput label={t('supplier', language)} value={form.supplier_id} onChange={e=>setForm({...form,supplier_id:e.target.value})}
             options={[{value:'',label:'— None —'}, ...suppliers.map(s=>({value:s.id,label:s.supplier_name}))]} />
           {!edit && <FormInput type="number" label={t('initialStock', language)} min="0" value={form.stock_quantity} onChange={e=>setForm({...form,stock_quantity:Number(e.target.value)})}
@@ -159,6 +175,61 @@ export default function Inventory() {
             options={['Good','Damaged']} />
           <div className="sm:col-span-2"><FileUploadInput label={t('itemImage', language)} onChange={setImgFile}
             preview={edit?.item_image ? `${UPLOAD_BASE}/${edit.item_image}` : null}/></div>
+
+          {/* Purchase Unit Conversions */}
+          <div className="sm:col-span-2">
+            <label className="block text-base font-medium mb-2">Purchase Unit Conversions (Optional)</label>
+            <div className="space-y-2">
+              {(form.conversions || []).map((conv, idx) => (
+                <div key={idx} className="flex gap-2 items-start">
+                  <select
+                    value={conv.purchase_unit_id}
+                    onChange={e => {
+                      const updated = [...form.conversions]
+                      updated[idx].purchase_unit_id = Number(e.target.value)
+                      setForm({...form, conversions: updated})
+                    }}
+                    className="flex-1 px-3 py-2 text-base rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                  >
+                    <option value="">Select Unit</option>
+                    {units.map(u => <option key={u.id} value={u.id}>{u.name} ({u.abbreviation})</option>)}
+                  </select>
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Factor"
+                    value={conv.conversion_factor || ''}
+                    onChange={e => {
+                      const updated = [...form.conversions]
+                      updated[idx].conversion_factor = Number(e.target.value)
+                      setForm({...form, conversions: updated})
+                    }}
+                    className="w-24 px-3 py-2 text-base rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const updated = form.conversions.filter((_, i) => i !== idx)
+                      setForm({...form, conversions: updated})
+                    }}
+                    className="p-2 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600"
+                  >
+                    <Trash2 className="w-5 h-5" />
+                  </button>
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => {
+                  setForm({...form, conversions: [...(form.conversions || []), {purchase_unit_id: '', conversion_factor: 1, is_default_purchase_unit: false}]})
+                }}
+                className="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800"
+              >
+                <Plus className="w-4 h-4" /> Add Conversion
+              </button>
+            </div>
+          </div>
+
           <label className="sm:col-span-2 block">
             <span className="block text-base font-medium mb-2">{t('notes', language)}</span>
             <textarea value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})}
@@ -201,7 +272,7 @@ export default function Inventory() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">{t('unit', language)}</label>
-                <div className="text-base font-medium">{viewDetail.unit}</div>
+                <div className="text-base font-medium">{viewDetail.base_unit ? `${viewDetail.base_unit.name} (${viewDetail.base_unit.abbreviation})` : (viewDetail.unit || '—')}</div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">{t('stockQuantity', language)}</label>
@@ -228,6 +299,26 @@ export default function Inventory() {
                 <div className="text-base font-medium">{viewDetail.created_at ? fmtDate(viewDetail.created_at) : '—'}</div>
               </div>
             </div>
+
+            {viewDetail.conversions && viewDetail.conversions.length > 0 && (
+              <div>
+                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">Purchase Unit Conversions</label>
+                <div className="space-y-2">
+                  {viewDetail.conversions.map(conv => (
+                    <div key={conv.id} className="flex items-center gap-2 text-base p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">
+                      <span className="font-medium">1 {conv.purchase_unit_name}</span>
+                      <span>=</span>
+                      <span className="font-medium">{conv.conversion_factor} {viewDetail.base_unit?.name || 'units'}</span>
+                      {viewDetail.stock_quantity > 0 && (
+                        <span className="ml-auto text-sm text-gray-600 dark:text-gray-400">
+                          (≈ {Math.floor(viewDetail.stock_quantity / conv.conversion_factor)} {conv.purchase_unit_name})
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {viewDetail.notes && (
               <div>

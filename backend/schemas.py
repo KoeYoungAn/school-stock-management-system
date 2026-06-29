@@ -134,6 +134,24 @@ class DepartmentOut(DepartmentBase):
 
 
 # ---------- Inventory ----------
+
+class InventoryConversionIn(BaseModel):
+    purchase_unit_id: int
+    conversion_factor: int = Field(gt=0)
+    is_default_purchase_unit: bool = False
+
+
+class InventoryConversionOut(BaseModel):
+    id: int
+    purchase_unit_id: int
+    purchase_unit_name: Optional[str] = None
+    abbreviation: Optional[str] = None
+    conversion_factor: int
+    is_default_purchase_unit: bool
+
+    class Config:
+        from_attributes = True
+
 class InventoryBase(BaseModel):
     item_name: str
     category: Optional[str] = None
@@ -146,7 +164,18 @@ class InventoryBase(BaseModel):
     notes: Optional[str] = None
 
 
-class InventoryCreate(InventoryBase):
+class InventoryCreate(BaseModel):
+    item_name: str = Field(min_length=1)
+    category: Optional[str] = None
+    base_unit_id: int
+    supplier_id: Optional[int] = None
+    stock_quantity: int = Field(ge=0) # Must be >=0 for initial stock
+    minimum_stock: int = Field(ge=0)
+    storage_location: Optional[str] = None
+    condition: Optional[str] = "Good"
+    notes: Optional[str] = None
+    conversions: List[InventoryConversionIn] = []
+    
     @field_validator('item_name')
     @classmethod
     def item_name_not_empty(cls, v):
@@ -158,21 +187,34 @@ class InventoryCreate(InventoryBase):
 class InventoryUpdate(BaseModel):
     item_name: Optional[str] = None
     category: Optional[str] = None
-    unit: Optional[str] = None
+    base_unit_id: Optional[int] = None
     supplier_id: Optional[int] = None
-    stock_quantity: Optional[int] = None
-    minimum_stock: Optional[int] = None
+    # stock_quantity is NOT updated via this endpoint, it's through movements
+    minimum_stock: Optional[int] = Field(None, ge=0)
     storage_location: Optional[str] = None
     condition: Optional[str] = None
     notes: Optional[str] = None
+    conversions: Optional[List[InventoryConversionIn]] = None
 
 
-class InventoryOut(InventoryBase):
+class InventoryOut(BaseModel):
     id: int
     item_code: str
-    item_image: Optional[str] = None
-    stock_status: Optional[str] = None
+    item_name: str
+    category: Optional[str] = None
+    unit: Optional[str] = None # Keep old unit for compatibility
+    base_unit_id: Optional[int] = None
+    base_unit: Optional[UnitOut] = None
+    supplier_id: Optional[int] = None
     supplier_name: Optional[str] = None
+    stock_quantity: int
+    minimum_stock: int
+    storage_location: Optional[str] = None
+    condition: Optional[str] = "Good"
+    item_image: Optional[str] = None
+    notes: Optional[str] = None
+    stock_status: Optional[str] = None
+    conversions: List[InventoryConversionOut] = []
 
     class Config:
         from_attributes = True

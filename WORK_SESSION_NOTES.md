@@ -1,6 +1,61 @@
 # Work Session Notes - School Stock Management System
 
-## Last Completed Work (2026-06-28)
+## Last Completed Work (2026-06-29)
+
+### Stock Management Units - PHASE 4 COMPLETE ✓
+
+**Implemented Inventory module support for unit conversions and base units.**
+
+#### Phase 4: Inventory Module Units - COMPLETED ✓
+
+**Backend Changes:**
+- Updated `inv_to_dict()` helper to return `base_unit_id`, `base_unit` object, and `conversions` list
+- Updated `list_inventory()` with eager loading (joinedload) for base_unit, conversions, and supplier to prevent N+1 queries
+- Updated `get_inventory()` with eager loading for relationships
+- Updated `create_inventory()` to:
+  - Accept `base_unit_id` (required) instead of unit text
+  - Accept conversions as JSON string parameter
+  - Create ItemUnitConversion records for purchase units
+  - Auto-populate old unit field with base unit abbreviation for backward compatibility
+- Updated `update_inventory()` to:
+  - Accept optional `base_unit_id` 
+  - Handle conversions updates (add/update/delete)
+  - Update old unit field when base unit changes
+
+**Frontend Changes:**
+- Updated Inventory form:
+  - Replaced unit text input with base_unit_id dropdown (showing unit name and abbreviation)
+  - Added conversions management UI with add/edit/delete rows
+  - Updated form submission to send conversions as JSON string
+- Updated Inventory table:
+  - Changed unit column to display base_unit.name instead of old unit text
+  - Falls back to old unit if base_unit not set
+- Updated Inventory detail view:
+  - Updated unit display to show base unit with abbreviation
+  - Added conversions section displaying purchase unit conversions
+  - Shows equivalent quantity conversion (e.g., "110 pieces = 11 boxes")
+
+**Files Modified:**
+- `backend/schemas.py` - Added InventoryConversionIn, InventoryConversionOut; Updated InventoryCreate, InventoryUpdate, InventoryOut
+- `backend/crud.py` - Updated list_inventory, get_inventory, create_inventory, update_inventory
+- `frontend/src/pages/Inventory.jsx` - Updated form, table, and detail view for base units and conversions
+
+**Verification Results:**
+- ✅ Backend Python compilation: PASSED (no errors)
+- ✅ Frontend build: PASSED (built in 3.12s, 350.84 kB)
+- ✅ ITM-009 verification: Stock 110 pieces, Conversion 1 box = 10 pieces
+- ✅ All stock quantities preserved (9 items verified)
+- ✅ No modifications to Receiving, Purchase Orders, Assignments, Returns, Reports, Stock Movements
+- ✅ Old unit field preserved for backward compatibility
+
+**Database State:**
+- All 9 inventory items have base_unit_id set
+- ITM-009 correctly migrated: 11 boxes → 110 pieces with conversion factor 10
+- All conversions preserved in item_unit_conversions table
+
+---
+
+## Previous Completed Work (2026-06-28)
 
 ### Stock Management Units - PHASE 3 COMPLETE ✓
 
@@ -148,7 +203,11 @@ git status
 - [x] Phase 2: Database & Backend Foundation
 - [x] Phase 3A: Migration Analysis & Review
 - [x] Phase 3B: Data Migration Execution
-- [ ] Phase 4: Update Receiving, PO, Assignments, Returns, Reports
+- [x] Phase 4: Inventory Module Units
+- [ ] Phase 5: Receiving Module Units
+- [ ] Phase 6: Purchase Order Module Units
+- [ ] Phase 7: Assignment and Returns Units
+- [ ] Phase 8: Stock Movements and Reports Units
 
 ---
 
@@ -174,3 +233,500 @@ git status
 - Admin confirmed: 1 box = 10 pieces
 - Migration: 11 boxes → 110 pieces
 - Conversion: box = 10 pieces
+
+# Unit Conversion Implementation Progress Plan
+
+## Project Context
+
+Project: School Stock Management System
+
+Goal:
+Implement a safe unit conversion system for inventory stock management.
+
+Core rule:
+Stock must be stored in the base/smallest unit.
+
+Example:
+
+* Notebook base unit = piece
+* Purchase unit = box
+* Conversion factor = 1 box = 10 pieces
+* If old stock is 11 boxes, migrated stock becomes 110 pieces
+
+Important:
+Unit belongs to the item, not only the category.
+Category should suggest suitable units, but should not force one unit for all items.
+
+Current categories:
+
+* Stationery
+* Furniture
+* ICT
+* Sports
+* Cleaning
+* Other
+
+---
+
+## Overall Unit Conversion Phase Plan
+
+### Phase 1: Audit and Planning
+
+Status: Completed
+
+Purpose:
+Inspect current project structure and design the unit conversion system before coding.
+
+Completed work:
+
+* Reviewed current unit usage
+* Reviewed inventory stock storage
+* Reviewed Purchase Orders
+* Reviewed Receiving
+* Reviewed Direct Stock Receipt
+* Reviewed Assignments
+* Reviewed Returns
+* Reviewed Stock Movements
+* Reviewed Reports
+* Proposed unit database design
+* Proposed migration strategy
+* Proposed implementation phases
+
+Result:
+Phase 1 completed and approved.
+
+---
+
+### Phase 2: Database and Backend Foundation
+
+Status: Completed
+
+Purpose:
+Add database foundation for unit management without changing stock calculations.
+
+Completed work:
+
+* Added units table
+* Added item_unit_conversions table
+* Added base_unit_id support for inventory items
+* Kept old unit text field for backward compatibility
+* Seeded standard units
+* Added backend models/schemas for units and conversions
+* Added basic unit/conversion APIs
+* Added helper function such as get_conversion_factor
+* Added tests
+* Confirmed existing stock quantities were preserved
+* Confirmed Receiving, Purchase Orders, Assignments, Returns, Reports, and Stock Movement calculations were not changed
+
+Seeded unit list:
+
+* piece
+* unit
+* box
+* pack
+* dozen
+* sheet
+* ream
+* bottle
+* liter
+* gallon
+* set
+* pair
+* meter
+* roll
+
+Result:
+Phase 2 completed and approved.
+
+---
+
+### Phase 3A: Existing Data Migration Analysis
+
+Status: Completed
+
+Purpose:
+Analyze existing inventory items and decide which old units can be safely migrated.
+
+Completed work:
+
+* Generated migration analysis
+* Identified safe units
+* Identified ambiguous units
+* Flagged box/pack/dozen/ream/gallon/unknown units for review
+* Confirmed stock values were not changed during analysis
+* ITM-009 notebook was flagged for review because old unit was box
+
+Safe mapping rules:
+
+* pcs -> piece
+* piece -> piece
+* unit -> unit
+* sheet -> sheet
+* bottle -> bottle
+* liter -> liter
+* meter -> meter
+* roll -> roll
+* set -> set
+* pair -> pair
+
+Review-needed units:
+
+* box
+* pack
+* dozen
+* ream
+* gallon
+* unknown
+* empty unit
+
+Result:
+Phase 3A completed and approved.
+
+---
+
+### Phase 3B: Existing Data Migration Execution
+
+Status: Completed
+
+Purpose:
+Apply approved safe migration and approved ambiguous item migration.
+
+Important approved admin decision:
+ITM-009 notebook:
+
+* Old unit: box
+* Old stock: 11 boxes
+* New base unit: piece
+* Purchase unit: box
+* Conversion factor: 1 box = 10 notebooks/pieces
+* New stock after migration: 110 pieces
+
+Completed work:
+
+* Database backup created before migration
+* Safe units migrated to base_unit_id
+* ITM-009 notebook migrated from 11 boxes to 110 pieces
+* ITM-009 base unit set to piece
+* ITM-009 item_unit_conversion created:
+
+  * purchase unit = box
+  * conversion factor = 10
+* Old unit text field kept
+* Other ambiguous items were not guessed or wrongly converted
+* Existing stock quantities were preserved except approved ITM-009 conversion
+* Backend compile/tests were run
+
+Result:
+Phase 3B completed and approved.
+
+---
+
+## Current Phase
+
+### Phase 5: Receiving Module Units
+
+Status: Next Phase (awaiting approval)
+
+Important:
+Phase 4 (Inventory Module Units) is now COMPLETED ✓
+New Claude session should continue to Phase 5 only after approval.
+
+Phase 5 purpose:
+Update Receiving module to support unit conversions when receiving stock.
+
+Phase 5 required work:
+
+1. Check current git status and unfinished changes.
+2. Run git diff and inspect partial work from interrupted Claude session.
+3. Update Inventory backend API responses to include:
+
+   * base_unit_id
+   * base_unit object/name
+   * item_unit_conversions list
+4. Update Inventory create/edit APIs to support:
+
+   * base_unit_id
+   * purchase unit conversions
+5. Update Inventory frontend form:
+
+   * base unit dropdown
+   * purchase unit conversion rows
+   * conversion factor input
+   * category-based unit suggestions
+6. Update Inventory table/detail display:
+
+   * show stock quantity in base unit
+   * show conversion preview
+   * show equivalent purchase unit quantity if available
+7. Verify ITM-009 displays correctly:
+
+   * Stock: 110 pieces
+   * Conversion: 1 box = 10 pieces
+   * Equivalent: 11 boxes
+8. Run backend compile/tests.
+9. Run frontend build.
+10. Stop after Phase 4.
+
+Important restrictions for Phase 4:
+
+* Do not modify Receiving calculations.
+* Do not modify Purchase Order calculations.
+* Do not modify Assignment calculations.
+* Do not modify Return calculations.
+* Do not modify Report calculations.
+* Do not modify Stock Movement calculations.
+* Do not remove old unit text field.
+* Do not re-run migration.
+* Do not change stock quantities.
+
+Phase 4 expected proof before approval:
+
+* Exact files changed
+* Backend API changes
+* Frontend UI changes
+* Proof ITM-009 displays as 110 pieces and 1 box = 10 pieces
+* Proof stock quantities did not change
+* Backend compile result
+* Backend test result
+* Frontend build result
+* Confirmation no Receiving, Purchase Order, Assignment, Return, Report, or Stock Movement calculation was changed
+* Remaining work for Phase 5
+
+---
+
+## Remaining Phases
+
+### Phase 5: Receiving Module Units
+
+Status: Not Started
+
+Purpose:
+Allow Receiving and Direct Stock Receipt to receive stock using base unit or purchase unit.
+
+Required future work:
+
+* Add received_unit_id
+* Add conversion_factor snapshot
+* Add received_base_quantity
+* Update Receive from PO logic
+* Update Direct Stock Receipt logic
+* Show conversion preview:
+
+  * Example: 5 boxes = 50 pieces
+* Validate selected unit has conversion
+* Increase inventory stock using base quantity
+* Update stock movement display context
+
+Important:
+Do not start Phase 5 until Phase 4 is approved and committed.
+
+---
+
+### Phase 6: Purchase Order Module Units
+
+Status: Not Started
+
+Purpose:
+Allow Purchase Order line items to use selected order units and store base quantity.
+
+Required future work:
+
+* Add ordered_unit_id
+* Add conversion_factor snapshot
+* Add ordered_base_quantity
+* Update PO form unit selector
+* Update PO detail display:
+
+  * Example: Ordered 10 boxes = 100 pieces
+* Receiving validation must compare base quantities
+* Prevent over-receiving based on base quantity
+
+Important:
+Do not start Phase 6 until Phase 5 is approved and committed.
+
+---
+
+### Phase 7: Assignment and Returns Units
+
+Status: Not Started
+
+Purpose:
+Make assignment and return logic work correctly with base-unit stock.
+
+Required future work:
+
+* Assignment should deduct base quantity
+* Assignment should validate against available base quantity
+* Returns should add back base quantity when returned to stock
+* Return form may support unit selector
+* Display unit context clearly
+
+Important:
+Do not start Phase 7 until Phase 6 is approved and committed.
+
+---
+
+### Phase 8: Stock Movements and Reports Units
+
+Status: Not Started
+
+Purpose:
+Update reports and stock movement display so unit conversion is understandable and accurate.
+
+Required future work:
+
+* Stock Movement Report should show:
+
+  * display quantity/unit
+  * base quantity/unit
+  * balance in base unit
+* Monthly Stock Summary should show base unit totals
+* Reports should include unit context
+* PDF export should show unit information clearly
+* Low Stock Report should use base-unit quantity for calculations
+
+Important:
+Do not start Phase 8 until Phase 7 is approved and committed.
+
+---
+
+### Phase 9: Historical Data Backfill
+
+Status: Optional / Not Started
+
+Purpose:
+Optionally add display-unit context to old stock movement records.
+
+Recommendation:
+Do not do this unless needed.
+Historical movement backfill is risky because old records may not clearly show whether quantity was entered as box, piece, pack, etc.
+
+Important:
+Do not infer old units without admin approval.
+Uncertain records should stay as legacy/unknown.
+
+---
+
+### Phase 10: Full Testing and Refinement
+
+Status: Not Started
+
+Purpose:
+Test the full unit conversion workflow from item setup to reports.
+
+Required future workflow test:
+
+1. Create item with base unit.
+2. Add purchase unit conversion.
+3. Create PO using purchase unit.
+4. Receive stock using purchase unit.
+5. Assign stock using base unit.
+6. Return stock.
+7. Check stock movements.
+8. Check reports.
+9. Confirm stock calculations are correct.
+
+Important:
+All critical stock calculation tests must pass before considering the feature complete.
+
+---
+
+### Phase 11: Final Deployment and Cleanup
+
+Status: Not Started
+
+Purpose:
+Finalize, document, and safely deploy the unit conversion feature.
+
+Required future work:
+
+* Confirm all tests pass
+* Confirm frontend build passes
+* Update user/admin documentation
+* Keep old unit field until system is stable
+* Drop old unit field only after long-term stability and backup
+
+Important:
+Do not drop the old unit field yet.
+
+---
+
+## Permanent Safety Rules for New Claude Sessions
+
+Before continuing work, always run:
+
+```bash
+git status
+git diff
+```
+
+New Claude session must read this file first:
+WORK_SESSION_NOTES.md
+
+New Claude session must continue only the current phase.
+
+Current phase:
+Phase 4: Inventory Module Units
+
+Do not start:
+
+* Phase 5 Receiving Units
+* Phase 6 Purchase Order Units
+* Phase 7 Assignment/Returns Units
+* Phase 8 Reports Units
+
+Do not modify these calculations yet:
+
+* Receiving
+* Purchase Orders
+* Assignments
+* Returns
+* Reports
+* Stock Movements
+
+Do not reset, clear, reseed, or replace database data.
+
+Do not remove old unit text field yet.
+
+Commit and push after every completed phase.
+
+Recommended git commit after Phase 4:
+
+```bash
+git add .
+git commit -m "Update inventory module for unit conversions"
+git push origin main
+```
+
+---
+
+## Next Instruction for New Claude Session
+
+Read WORK_SESSION_NOTES.md first.
+
+Then run:
+
+```bash
+git status
+git diff
+```
+
+Continue Phase 4 only.
+
+Your job:
+Finish Inventory Module Units.
+
+Do not start Receiving, Purchase Orders, Assignments, Returns, Reports, or Stock Movement unit changes yet.
+
+Stop after Phase 4 and provide proof:
+
+1. Exact files changed
+2. Backend API changes
+3. Frontend UI changes
+4. ITM-009 display proof
+5. Stock quantity preservation proof
+6. Backend compile result
+7. Backend test result
+8. Frontend build result
+9. Confirmation no other module calculations were changed
+10. Remaining work for Phase 5

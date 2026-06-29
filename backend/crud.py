@@ -44,13 +44,21 @@ def stock_status(item: models.InventoryItem) -> str:
 def inv_to_dict(it: models.InventoryItem) -> dict:
     return {
         "id": it.id, "item_code": it.item_code, "item_name": it.item_name,
-        "category": it.category, "unit": it.unit, "supplier_id": it.supplier_id,
+        "category": it.category, "unit": it.unit, "base_unit_id": it.base_unit_id,
+        "base_unit": {"id": it.base_unit.id, "name": it.base_unit.name} if it.base_unit else None,
+        "supplier_id": it.supplier_id,
         "supplier_name": it.supplier.supplier_name if it.supplier else None,
         "stock_quantity": it.stock_quantity, "minimum_stock": it.minimum_stock,
         "storage_location": it.storage_location, "condition": it.condition,
         "item_image": it.item_image, "notes": it.notes,
         "stock_status": stock_status(it),
         "created_at": it.created_at,
+        "conversions": [{
+            "id": c.id, "purchase_unit_id": c.purchase_unit_id,
+            "purchase_unit_name": c.purchase_unit.name,
+            "conversion_factor": c.conversion_factor,
+            "is_default_purchase_unit": c.is_default_purchase_unit
+        } for c in it.conversions]
     }
 
 
@@ -505,7 +513,12 @@ def list_inventory(page: int = 1, limit: int = 20, search: str = "",
                    sort_by: str = "id", sort_order: str = "desc",
                    db: Session = Depends(get_db),
                    _: models.User = Depends(get_current_user)):
+    from sqlalchemy.orm import joinedload
     q = db.query(models.InventoryItem).filter(models.InventoryItem.is_deleted == False)  # noqa
+    # Eager load relationships to prevent N+1 queries
+    q = q.options(joinedload(models.InventoryItem.base_unit),
+                  joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit),
+                  joinedload(models.InventoryItem.supplier))
     if search:
         like = f"%{search}%"
         q = q.filter(or_(models.InventoryItem.item_name.ilike(like),
@@ -525,28 +538,64 @@ def list_inventory(page: int = 1, limit: int = 20, search: str = "",
 async def create_inventory(
     item_name: str = Form(...),
     category: str = Form(""),
-    unit: str = Form("pcs"),
+    base_unit_id: int = Form(...),
     supplier_id: Optional[int] = Form(None),
     stock_quantity: int = Form(0),
     minimum_stock: int = Form(0),
     storage_location: str = Form(""),
     condition: str = Form("Good"),
     notes: str = Form(""),
+    conversions: str = Form("[]"),  # JSON string of conversions
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     user: models.User = Depends(require_staff),
 ):
+    import json
     if stock_quantity < 0 or minimum_stock < 0:
         raise HTTPException(400, "Quantity values cannot be negative")
+
+    # Verify base_unit exists
+    base_unit = db.query(models.Unit).filter(models.Unit.id == base_unit_id).first()
+    if not base_unit:
+        raise HTTPException(400, "Invalid base unit")
+
+    # Parse conversions JSON
+    try:
+        conversions_data = json.loads(conversions)
+    except json.JSONDecodeError:
+        raise HTTPException(400, "Invalid conversions JSON")
+
     code = gen_item_code(db)
     img_path = save_upload(image, "items") if image and image.filename else None
+
+    # Keep old unit field populated with base unit abbreviation for backward compatibility
     it = models.InventoryItem(
-        item_code=code, item_name=item_name, category=category, unit=unit,
+        item_code=code, item_name=item_name, category=category,
+        unit=base_unit.abbreviation or base_unit.name,
+        base_unit_id=base_unit_id,
         supplier_id=supplier_id or None, stock_quantity=stock_quantity,
         minimum_stock=minimum_stock, storage_location=storage_location,
         condition=condition, item_image=img_path, notes=notes,
     )
     db.add(it); db.commit(); db.refresh(it)
+
+    # Create conversions
+    for conv_data in conversions_data:
+        purchase_unit_id = conv_data.get("purchase_unit_id")
+        conversion_factor = conv_data.get("conversion_factor")
+        is_default = conv_data.get("is_default_purchase_unit", False)
+
+        if purchase_unit_id and conversion_factor and conversion_factor > 0:
+            conv = models.ItemUnitConversion(
+                item_id=it.id,
+                purchase_unit_id=purchase_unit_id,
+                conversion_factor=conversion_factor,
+                is_default_purchase_unit=is_default
+            )
+            db.add(conv)
+
+    db.commit()
+
     if stock_quantity > 0:
         record_movement(db, it, "IN", stock_quantity, "Manual", None, user.id, "Initial stock")
         db.commit()
@@ -557,7 +606,12 @@ async def create_inventory(
 @inv_router.get("/{iid}")
 def get_inventory(iid: int, db: Session = Depends(get_db),
                   _: models.User = Depends(get_current_user)):
-    it = db.query(models.InventoryItem).filter(models.InventoryItem.id == iid, models.InventoryItem.is_deleted == False).first()  # noqa
+    from sqlalchemy.orm import joinedload
+    it = db.query(models.InventoryItem).options(
+        joinedload(models.InventoryItem.base_unit),
+        joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit),
+        joinedload(models.InventoryItem.supplier)
+    ).filter(models.InventoryItem.id == iid, models.InventoryItem.is_deleted == False).first()  # noqa
     if not it:
         raise HTTPException(404, "Not found")
     return inv_to_dict(it)
@@ -568,27 +622,89 @@ async def update_inventory(
     iid: int,
     item_name: str = Form(...),
     category: str = Form(""),
-    unit: str = Form("pcs"),
+    base_unit_id: Optional[int] = Form(None),
     supplier_id: Optional[int] = Form(None),
     minimum_stock: int = Form(0),
     storage_location: str = Form(""),
     condition: str = Form("Good"),
     notes: str = Form(""),
+    conversions: str = Form(""),  # JSON string of conversions or empty
     image: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
     user: models.User = Depends(require_staff),
 ):
-    it = db.query(models.InventoryItem).filter(models.InventoryItem.id == iid, models.InventoryItem.is_deleted == False).first()  # noqa
+    import json
+    from sqlalchemy.orm import joinedload
+
+    it = db.query(models.InventoryItem).options(
+        joinedload(models.InventoryItem.base_unit),
+        joinedload(models.InventoryItem.conversions)
+    ).filter(models.InventoryItem.id == iid, models.InventoryItem.is_deleted == False).first()  # noqa
     if not it:
         raise HTTPException(404, "Not found")
     if minimum_stock < 0:
         raise HTTPException(400, "Minimum stock cannot be negative")
-    it.item_name = item_name; it.category = category; it.unit = unit
+
+    # Update base_unit_id if provided
+    if base_unit_id is not None:
+        base_unit = db.query(models.Unit).filter(models.Unit.id == base_unit_id).first()
+        if not base_unit:
+            raise HTTPException(400, "Invalid base unit")
+        it.base_unit_id = base_unit_id
+        # Update old unit field for backward compatibility
+        it.unit = base_unit.abbreviation or base_unit.name
+
+    it.item_name = item_name; it.category = category
     it.supplier_id = supplier_id or None
     it.minimum_stock = minimum_stock
     it.storage_location = storage_location; it.condition = condition; it.notes = notes
     if image and image.filename:
         it.item_image = save_upload(image, "items")
+
+    # Update conversions if provided
+    if conversions:
+        try:
+            conversions_data = json.loads(conversions)
+        except json.JSONDecodeError:
+            raise HTTPException(400, "Invalid conversions JSON")
+
+        # Build set of provided conversion IDs for deletion detection
+        provided_ids = set()
+        for conv_data in conversions_data:
+            conv_id = conv_data.get("id")
+            purchase_unit_id = conv_data.get("purchase_unit_id")
+            conversion_factor = conv_data.get("conversion_factor")
+
+            if conv_id:
+                provided_ids.add(conv_id)
+                # Update existing
+                conv = db.query(models.ItemUnitConversion).filter(
+                    models.ItemUnitConversion.id == conv_id,
+                    models.ItemUnitConversion.item_id == iid
+                ).first()
+                if conv and conversion_factor and conversion_factor > 0:
+                    conv.purchase_unit_id = purchase_unit_id
+                    conv.conversion_factor = conversion_factor
+                    conv.is_default_purchase_unit = conv_data.get("is_default_purchase_unit", False)
+            else:
+                # Add new
+                if purchase_unit_id and conversion_factor and conversion_factor > 0:
+                    conv = models.ItemUnitConversion(
+                        item_id=iid,
+                        purchase_unit_id=purchase_unit_id,
+                        conversion_factor=conversion_factor,
+                        is_default_purchase_unit=conv_data.get("is_default_purchase_unit", False)
+                    )
+                    db.add(conv)
+
+        # Delete conversions not in provided list
+        existing_conversions = db.query(models.ItemUnitConversion).filter(
+            models.ItemUnitConversion.item_id == iid
+        ).all()
+        for conv in existing_conversions:
+            if conv.id not in provided_ids:
+                db.delete(conv)
+
     db.commit()
     log_audit(db, user.id, "update", "inventory", it.id, f"Updated item {it.item_code}")
     return {"ok": True}
