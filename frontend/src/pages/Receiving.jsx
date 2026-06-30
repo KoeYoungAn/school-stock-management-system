@@ -26,8 +26,17 @@ const receivingSchema = {
   receiver_name: [required('Receiver Name')]
 }
 
+const directReceiptSchema = {
+  item_id: [selectRequired('Item')],
+  received_unit_id: [selectRequired('Unit')],
+  quantity_received: [required('Quantity'), positiveNumber('Quantity')],
+  source: [required('Source')],
+  reason: [required('Reason')],
+  receiver_name: [required('Receiver Name')],
+}
+
 const blankReceivePO = { purchase_order_id:'', purchase_order_item_id:'', item_id:'', quantity_received:1, receiver_name:'', status:'Received', notes:'' }
-const blankDirectReceipt = { item_id: '', quantity: 1, source: '', reason: '', receiver_name: '', notes: '' }
+const blankDirectReceipt = { item_id: '', received_unit_id: '', quantity_received: 1, source: '', reason: '', receiver_name: '', notes: '' }
 
 export default function Receiving() {
   const { user } = useAuth(); const toast = useToast()
@@ -37,10 +46,13 @@ export default function Receiving() {
   const [loading,setLoading]=useState(false); const [openPO,setOpenPO]=useState(false); const [edit,setEdit]=useState(null)
   const [formPO,setFormPO]=useState(blankReceivePO); const [del,setDel]=useState(null)
   const [pos,setPos]=useState([]); const [items,setItems]=useState([])
+  const [units, setUnits] = useState([]) // New: to store all units
+  const [selectedItemDetails, setSelectedItemDetails] = useState(null) // New: for direct receipt item details
   const [directReceiptOpen, setDirectReceiptOpen] = useState(false)
   const [directReceiptForm, setDirectReceiptForm] = useState(blankDirectReceipt)
 
   const { errors, validateAll, handleBlur, clearErrors, hasErrors } = useValidation(receivingSchema)
+  const { errors: directReceiptErrors, validateAll: validateDirectReceipt, handleBlur: handleDirectReceiptBlur, clearErrors: clearDirectReceiptErrors, hasErrors: hasDirectReceiptErrors } = useValidation(directReceiptSchema)
 
   const load = async () => {
     setLoading(true)
@@ -55,7 +67,16 @@ export default function Receiving() {
   useEffect(()=>{
     loadPOs().catch(()=>{})
     api.get('/api/inventory?limit=500').then(r=>setItems(r.data.items)).catch(()=>{})
+    api.get('/api/units?limit=200').then(r=>setUnits(r.data.items)).catch(()=>{})
   },[])
+
+  useEffect(() => {
+    if (directReceiptForm.item_id) {
+      api.get(`/api/inventory/${directReceiptForm.item_id}`).then(r => setSelectedItemDetails(r.data)).catch(()=>{})
+    } else {
+      setSelectedItemDetails(null)
+    }
+  }, [directReceiptForm.item_id])
 
   const receivablePOs = pos.filter(po =>
     ['Approved', 'Partially Received'].includes(po.status) &&
@@ -109,25 +130,24 @@ export default function Receiving() {
 
   const submitDirectReceipt = async (e) => {
     e.preventDefault()
-    if (!directReceiptForm.item_id) { toast.error('Item is required'); return }
-    if (!directReceiptForm.source?.trim()) { toast.error('Source is required'); return }
-    if (!directReceiptForm.reason?.trim()) { toast.error('Reason is required'); return }
-    if (!directReceiptForm.receiver_name?.trim()) { toast.error('Receiver Name is required'); return }
-    if (Number(directReceiptForm.quantity) <= 0) { toast.error('Quantity must be greater than 0'); return }
+    const { isValid } = validateDirectReceipt(directReceiptForm)
+    if (!isValid) { toast.error('Please fix validation errors'); return }
 
     try {
       const payload = {
         item_id: Number(directReceiptForm.item_id),
-        quantity_received: Number(directReceiptForm.quantity),
+        received_unit_id: Number(directReceiptForm.received_unit_id),
+        quantity_received: Number(directReceiptForm.quantity_received),
         source: directReceiptForm.source.trim(),
         reason: directReceiptForm.reason.trim(),
         receiver_name: directReceiptForm.receiver_name.trim(),
         notes: directReceiptForm.notes || ''
       }
       const r = await api.post('/api/direct-receipt', payload)
-      toast.success(`Direct receipt saved. New stock: ${r.data.new_stock}`)
+      toast.success(`Direct receipt saved: ${r.data.conversion_display}. New stock: ${r.data.new_stock}`)
       setDirectReceiptOpen(false)
       setDirectReceiptForm(blankDirectReceipt)
+      clearDirectReceiptErrors()
       load()
     } catch(e) { toast.error(errMsg(e)) }
   }
@@ -143,7 +163,21 @@ export default function Receiving() {
   const columns = [
     { key:'receiving_number', label:t('receiveNumber', language) },
     { key:'item_name', label:t('item', language), render:r=>`${r.item_code||''} ${r.item_name||''}` },
-    { key:'quantity_received', label:t('qty', language) },
+    { key:'quantity_received', label:t('qty', language), render:r=> {
+      // Phase 5A: Show conversion display if available
+      if (r.received_unit_name && r.conversion_factor && r.received_quantity_display) {
+        if (r.conversion_factor === 1) {
+          return `${r.quantity_received} ${r.received_unit_name}`;
+        } else {
+          return (
+            <span title={`${r.received_quantity_display} ${r.received_unit_name} = ${r.quantity_received} base units`}>
+              {r.received_quantity_display} {r.received_unit_name} <span className="text-xs text-gray-500">({r.quantity_received})</span>
+            </span>
+          );
+        }
+      }
+      return r.quantity_received;
+    }},
     { key:'receiver_name', label:t('name', language) },
     { key:'date_received', label:t('date', language), render:r=>fmtDate(r.date_received) },
     { key:'status', label:t('status', language), render:r=> <StatusBadge value={r.status}/> },
@@ -236,18 +270,78 @@ export default function Receiving() {
             <strong>📋 Direct Receipt: for opening stock, donation, emergency stock, or approved manual entry only.</strong>
           </div>
           <SelectInput label={t('item', language)} required value={directReceiptForm.item_id}
-            onChange={e=>setDirectReceiptForm({...directReceiptForm,item_id:e.target.value})}
-            options={[{value:'',label:'— Select Item —'}, ...items.map(i=>({value:i.id,label:`${i.item_code} ${i.item_name}`}))]}/>
-          <FormInput type="number" min="1" label="Quantity" required value={directReceiptForm.quantity}
-            onChange={e=>setDirectReceiptForm({...directReceiptForm,quantity:e.target.value})}/>
+            onChange={e=>setDirectReceiptForm({...directReceiptForm,item_id:e.target.value,received_unit_id:''})}
+            options={[{value:'',label:'— Select Item —'}, ...items.map(i=>({value:i.id,label:`${i.item_code} ${i.item_name}`}))]}
+            error={directReceiptErrors.item_id} onBlur={e=>handleDirectReceiptBlur('item_id', e.target.value)}/>
+
+          {selectedItemDetails && (
+            <>
+              <FormInput type="number" min="1" label="Quantity" required value={directReceiptForm.quantity_received}
+                onChange={e=>setDirectReceiptForm({...directReceiptForm,quantity_received:e.target.value})}
+                error={directReceiptErrors.quantity_received} onBlur={e=>handleDirectReceiptBlur('quantity_received', e.target.value)}/>
+
+              <SelectInput label="Unit" required value={directReceiptForm.received_unit_id}
+                onChange={e=>setDirectReceiptForm({...directReceiptForm,received_unit_id:e.target.value})}
+                options={[
+                  {value:'',label:'— Select Unit —'},
+                  ...(selectedItemDetails.base_unit ? [{value:selectedItemDetails.base_unit.id,label:`${selectedItemDetails.base_unit.name} (Base Unit)`}] : []),
+                  ...(selectedItemDetails.conversions || []).map(c=>({value:c.purchase_unit_id,label:`${c.purchase_unit_name} (1 = ${c.conversion_factor} ${selectedItemDetails.base_unit?.name || 'units'})`}))
+                ]}
+                error={directReceiptErrors.received_unit_id} onBlur={e=>handleDirectReceiptBlur('received_unit_id', e.target.value)}/>
+
+              {directReceiptForm.received_unit_id && directReceiptForm.quantity_received > 0 && (() => {
+                const qty = Number(directReceiptForm.quantity_received);
+                const selectedUnitId = Number(directReceiptForm.received_unit_id);
+                const baseUnitId = selectedItemDetails.base_unit?.id;
+                const baseUnitName = selectedItemDetails.base_unit?.name || 'units';
+
+                let conversionFactor = 1;
+                let selectedUnitName = baseUnitName;
+
+                if (selectedUnitId === baseUnitId) {
+                  conversionFactor = 1;
+                  selectedUnitName = baseUnitName;
+                } else {
+                  const conv = (selectedItemDetails.conversions || []).find(c => c.purchase_unit_id === selectedUnitId);
+                  if (conv) {
+                    conversionFactor = conv.conversion_factor;
+                    selectedUnitName = conv.purchase_unit_name;
+                  }
+                }
+
+                const baseQuantity = qty * conversionFactor;
+                const newStock = (selectedItemDetails.stock_quantity || 0) + baseQuantity;
+
+                return (
+                  <div className="sm:col-span-2 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-200 dark:border-green-800">
+                    <div className="text-sm font-medium text-green-800 dark:text-green-200 mb-2">
+                      📦 Conversion Preview:
+                    </div>
+                    <div className="text-base font-bold text-green-700 dark:text-green-300">
+                      {conversionFactor === 1
+                        ? `${qty} ${selectedUnitName}`
+                        : `${qty} ${selectedUnitName} = ${baseQuantity} ${baseUnitName}`}
+                    </div>
+                    <div className="text-sm text-green-600 dark:text-green-400 mt-2">
+                      Current stock: {selectedItemDetails.stock_quantity} {baseUnitName} → New stock: <strong>{newStock} {baseUnitName}</strong>
+                    </div>
+                  </div>
+                );
+              })()}
+            </>
+          )}
+
           <FormInput label="Source" required value={directReceiptForm.source}
             onChange={e=>setDirectReceiptForm({...directReceiptForm,source:e.target.value})}
-            placeholder="e.g., Opening Stock, Donation"/>
+            placeholder="e.g., Opening Stock, Donation"
+            error={directReceiptErrors.source} onBlur={e=>handleDirectReceiptBlur('source', e.target.value)}/>
           <FormInput label="Reason" required value={directReceiptForm.reason}
             onChange={e=>setDirectReceiptForm({...directReceiptForm,reason:e.target.value})}
-            placeholder="e.g., Initial inventory"/>
+            placeholder="e.g., Initial inventory"
+            error={directReceiptErrors.reason} onBlur={e=>handleDirectReceiptBlur('reason', e.target.value)}/>
           <FormInput label="Receiver Name" required value={directReceiptForm.receiver_name}
-            onChange={e=>setDirectReceiptForm({...directReceiptForm,receiver_name:e.target.value})}/>
+            onChange={e=>setDirectReceiptForm({...directReceiptForm,receiver_name:e.target.value})}
+            error={directReceiptErrors.receiver_name} onBlur={e=>handleDirectReceiptBlur('receiver_name', e.target.value)}/>
           <label className="sm:col-span-2 block">
             <span className="block text-sm font-medium mb-1">Notes</span>
             <textarea value={directReceiptForm.notes||''} onChange={e=>setDirectReceiptForm({...directReceiptForm,notes:e.target.value})} rows="2"
@@ -255,7 +349,7 @@ export default function Receiving() {
           </label>
           <div className="sm:col-span-2 flex justify-end gap-2">
             <button type="button" onClick={()=>setDirectReceiptOpen(false)} className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600">Cancel</button>
-            <button className="px-3 py-2 rounded-lg bg-blue-600 text-white">Save Direct Receipt</button>
+            <button disabled={hasDirectReceiptErrors} className="px-3 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50 disabled:cursor-not-allowed">Save Direct Receipt</button>
           </div>
         </form>
       </Modal>

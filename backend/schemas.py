@@ -346,8 +346,8 @@ class ReceiveMoreRequest(BaseModel):
 class DirectReceiptCreate(BaseModel):
     """Direct stock receipt without PO - for opening stock, donations, emergency receipt"""
     item_id: int
-    quantity_received: Optional[int] = Field(default=None, gt=0)
-    quantity: Optional[int] = Field(default=None, gt=0)  # compatibility with existing frontend draft
+    received_unit_id: int  # Unit selected for receipt (base unit or purchase unit)
+    quantity_received: int = Field(gt=0)  # Quantity in the selected unit
     source: str = Field(min_length=1)  # e.g., "Opening Stock", "Donation", "Emergency"
     reason: str = Field(min_length=1)  # e.g., "Initial inventory", "Donated by..."
     receiver_name: str = Field(min_length=1)
@@ -360,6 +360,10 @@ class ReceivingOut(ReceivingBase):
     item_name: Optional[str] = None
     item_code: Optional[str] = None
     date_received: Optional[datetime] = None
+    received_unit_id: Optional[int] = None
+    received_unit_name: Optional[str] = None  # Display unit name for readability
+    conversion_factor: Optional[int] = None  # Snapshot of conversion at time of receipt
+    received_quantity_display: Optional[int] = None  # Original quantity in selected unit
 
     class Config:
         from_attributes = True

@@ -1332,7 +1332,12 @@ def _rcv_dict(r: models.Receiving) -> dict:
         "item_id": r.item_id,
         "item_name": r.item.item_name if r.item else None,
         "item_code": r.item.item_code if r.item else None,
-        "quantity_received": r.quantity_received, "receiver_name": r.receiver_name,
+        "quantity_received": r.quantity_received,  # This is base quantity
+        "received_unit_id": r.received_unit_id,
+        "received_unit_name": r.received_unit.name if r.received_unit else None,
+        "conversion_factor": r.conversion_factor,
+        "received_quantity_display": r.received_quantity_display,
+        "receiver_name": r.receiver_name,
         "date_received": r.date_received, "status": r.status, "notes": r.notes,
     }
 
@@ -1573,9 +1578,12 @@ def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = De
     """
     Direct Stock Receipt - for opening stock, donation, emergency stock,
     or approved manual entry. This is separate from PO receiving.
+
+    Phase 5A: Supports unit conversion - user selects unit for receipt,
+    backend calculates base quantity and stores conversion context.
     """
     try:
-        qty = payload.quantity_received or payload.quantity
+        qty = payload.quantity_received
         if not qty or qty <= 0:
             raise HTTPException(400, "Quantity must be positive")
         if not payload.source or not payload.source.strip():
@@ -1585,14 +1593,47 @@ def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = De
         if not payload.receiver_name or not payload.receiver_name.strip():
             raise HTTPException(400, "Receiver name is required")
 
-        item = db.query(models.InventoryItem).filter(
+        # Find item with base_unit relationship
+        from sqlalchemy.orm import joinedload
+        item = db.query(models.InventoryItem).options(
+            joinedload(models.InventoryItem.base_unit)
+        ).filter(
             models.InventoryItem.id == payload.item_id,
             models.InventoryItem.is_deleted == False
         ).first()
         if not item:
             raise HTTPException(404, "Item not found")
 
-        notes = f"DIRECT_RECEIPT | Source: {payload.source.strip()} | Reason: {payload.reason.strip()}"
+        # Validate received_unit_id and get conversion factor
+        received_unit_id = payload.received_unit_id
+
+        # Check if received_unit is the item's base unit
+        if item.base_unit_id and received_unit_id == item.base_unit_id:
+            conversion_factor = 1
+            received_unit_name = item.base_unit.name if item.base_unit else "unit"
+        else:
+            # Get conversion factor using helper from utils.py
+            from utils import get_conversion_factor
+            conversion_factor = get_conversion_factor(db, item.id, received_unit_id)
+            if not conversion_factor or conversion_factor <= 0:
+                raise HTTPException(400,
+                    f"Invalid unit for this item. Selected unit must be the item's base unit or a configured purchase unit with a valid conversion.")
+
+            # Get received unit name for display
+            received_unit = db.query(models.Unit).filter(models.Unit.id == received_unit_id).first()
+            received_unit_name = received_unit.name if received_unit else "unit"
+
+        # Calculate base quantity for stock increase
+        base_quantity = qty * conversion_factor
+
+        # Build conversion display for notes and audit
+        if conversion_factor == 1:
+            conversion_display = f"{qty} {received_unit_name}"
+        else:
+            base_unit_name = item.base_unit.name if item.base_unit else "units"
+            conversion_display = f"{qty} {received_unit_name} = {base_quantity} {base_unit_name}"
+
+        notes = f"DIRECT_RECEIPT | Source: {payload.source.strip()} | Reason: {payload.reason.strip()} | Received: {conversion_display}"
         if payload.notes:
             notes += f" | Notes: {payload.notes}"
 
@@ -1601,7 +1642,10 @@ def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = De
             purchase_order_id=None,
             purchase_order_item_id=None,
             item_id=item.id,
-            quantity_received=qty,
+            quantity_received=base_quantity,  # Always store base quantity
+            received_unit_id=received_unit_id,  # Store selected unit
+            conversion_factor=conversion_factor,  # Store conversion snapshot
+            received_quantity_display=qty,  # Store original quantity in selected unit
             receiver_name=payload.receiver_name.strip(),
             status="Received",
             notes=notes,
@@ -1609,14 +1653,15 @@ def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = De
         db.add(r)
         db.flush()
 
-        record_movement(db, item, "IN", qty,
+        # Record stock movement with base quantity
+        record_movement(db, item, "IN", base_quantity,
                         "DIRECT_RECEIPT", r.id, user.id,
-                        f"Direct receipt {r.receiving_number}: {payload.source.strip()} - {payload.reason.strip()}")
+                        f"Direct receipt {r.receiving_number}: {conversion_display} - {payload.source.strip()}")
 
         db.add(models.AuditLog(
             user_id=user.id, action="direct_receipt", module="receiving",
             record_id=r.id,
-            description=f"Direct receipt {r.receiving_number}: {qty} x {item.item_name} ({payload.source.strip()})"
+            description=f"Direct receipt {r.receiving_number}: {conversion_display} of {item.item_name} ({payload.source.strip()})"
         ))
         db.commit()
 
@@ -1626,12 +1671,19 @@ def create_direct_receipt(payload: schemas.DirectReceiptCreate, db: Session = De
             "receiving_number": r.receiving_number,
             "item_code": item.item_code,
             "item_name": item.item_name,
-            "quantity": qty,
+            "quantity_display": qty,
+            "unit_name": received_unit_name,
+            "base_quantity": base_quantity,
+            "conversion_display": conversion_display,
             "new_stock": item.stock_quantity,
             "source": payload.source,
             "reason": payload.reason
         }
-    except Exception:
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Direct receipt failed: {str(e)}")
         db.rollback()
         raise
 

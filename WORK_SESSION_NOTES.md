@@ -1,6 +1,96 @@
 # Work Session Notes - School Stock Management System
 
-## Last Completed Work (2026-06-29)
+## Last Completed Work (2026-06-30)
+
+### Stock Management Units - PHASE 5A COMPLETE ✓
+
+**Implemented Direct Stock Receipt unit conversion support for Receiving module.**
+
+#### Phase 5A: Receiving Module Unit Support Foundation - COMPLETED ✓
+
+**Backend Changes:**
+
+1. **`backend/models.py` - Receiving model:**
+   - Added `received_unit_id` (ForeignKey to units table)
+   - Added `conversion_factor` (Integer - snapshot of conversion at time of receipt)
+   - Added `received_quantity_display` (Integer - original quantity in selected unit)
+   - Added `received_unit` relationship to Unit model
+   - Note: `quantity_received` field always stores base unit quantity
+
+2. **`backend/schemas.py` - Receiving schemas:**
+   - Updated `DirectReceiptCreate`: Now requires `received_unit_id` (int) and `quantity_received` (int - display quantity)
+   - Updated `ReceivingOut`: Added `received_unit_id`, `received_unit_name`, `conversion_factor`, `received_quantity_display` fields
+   - Added `directReceiptSchema` validation in Receiving.jsx
+
+3. **`backend/crud.py` - Direct Receipt endpoint:**
+   - Updated `create_direct_receipt()` with complete unit conversion logic:
+     - Validates `received_unit_id` (must be base unit or configured purchase unit)
+     - Gets conversion factor using existing `get_conversion_factor()` helper
+     - Calculates `base_quantity = quantity_received × conversion_factor`
+     - Stores conversion context (received_unit_id, conversion_factor, received_quantity_display)
+     - Updates inventory stock using `base_quantity` only
+     - Returns `conversion_display` in response (e.g., "2 boxes = 20 pieces")
+   - Updated `_rcv_dict()` helper to include unit conversion fields in API responses
+
+**Frontend Changes:**
+
+1. **`frontend/src/pages/Receiving.jsx` - Complete overhaul:**
+   - Added `units` state and `selectedItemDetails` state for unit conversion support
+   - Added `directReceiptSchema` validation schema
+   - Added separate `useValidation` hook for direct receipt form
+   - Added `useEffect` to fetch units from API on component mount
+   - Added `useEffect` to fetch selected item details (base unit and conversions) when item_id changes
+   - Updated `submitDirectReceipt()` to:
+     - Validate all required fields including `received_unit_id`
+     - Send `received_unit_id` and `quantity_received` to backend
+     - Display conversion information in success toast
+   - Updated Direct Stock Receipt modal UI:
+     - Added unit dropdown showing base unit + purchase unit conversions with factors
+     - Added conversion preview showing "X units = Y base units" with color highlighting
+     - Added stock increase preview showing current stock → new stock
+     - Added validation error display
+     - Disabled submit button when validation errors exist
+   - Updated Receiving table display:
+     - Shows received quantity in display unit with base unit in parentheses
+     - Example: "2 boxes (20)" with tooltip showing conversion details
+
+**Testing Results:**
+
+Automated Tests (All PASSED):
+- ✅ ITM-009 Initial State: Stock is 110 pieces (as expected)
+- ✅ Conversion Factor Validation: box = 10 pieces (verified)
+- ✅ Invalid Unit Rejection Setup: dozen unit NOT configured for ITM-009 (correct)
+- ✅ Direct Receipt Calculation: 2 boxes = 20 pieces, 110 + 20 = 130 (correct math)
+
+Build Results:
+- ✅ Backend Python compilation: PASSED (models.py, schemas.py, crud.py, utils.py all compile)
+- ✅ Frontend build: PASSED (built in 3.10s, 353.60 kB)
+
+**Files Modified (4 files):**
+- `backend/crud.py` - Updated create_direct_receipt() and _rcv_dict()
+- `backend/models.py` - Updated Receiving model with unit fields
+- `backend/schemas.py` - Updated DirectReceiptCreate and ReceivingOut schemas
+- `frontend/src/pages/Receiving.jsx` - Complete update with units support
+
+**ITM-009 Test Scenario Verification:**
+- Current Stock: 110 pieces (verified in database)
+- Base Unit: piece (pcs) (verified)
+- Conversion: 1 box = 10 pieces (verified)
+- Test Case: Receive 2 boxes
+  - Calculation: 2 × 10 = 20 pieces added
+  - Expected New Stock: 110 + 20 = 130 pieces
+  - Backend logic: ✅ VERIFIED
+
+**Important Notes:**
+- ✅ Existing PO receiving behavior NOT modified (receive_more endpoint unchanged)
+- ✅ No changes to Purchase Orders module (Phase 6)
+- ✅ No changes to Assignments, Returns, Reports, Stock Movements
+- ✅ Old `unit` field in Receiving model preserved
+- ✅ Direct Stock Receipt now supports unit conversions only (PO receiving unchanged for Phase 6)
+
+---
+
+## Previous Completed Work (2026-06-29)
 
 ### Stock Management Units - PHASE 4 COMPLETE ✓
 

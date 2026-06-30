@@ -171,7 +171,10 @@ class Receiving(Base):
     purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"))
     purchase_order_item_id = Column(Integer, ForeignKey("purchase_order_items.id"))
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
-    quantity_received = Column(Integer, nullable=False)
+    quantity_received = Column(Integer, nullable=False)  # Base unit quantity (always)
+    received_unit_id = Column(Integer, ForeignKey("units.id"))  # Unit user selected for receipt
+    conversion_factor = Column(Integer)  # Snapshot of conversion factor at time of receipt
+    received_quantity_display = Column(Integer)  # Original quantity in selected unit
     receiver_name = Column(String(150))
     date_received = Column(DateTime, default=_now)
     status = Column(String(20), default="Pending")  # Pending/Received
@@ -180,6 +183,7 @@ class Receiving(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     item = relationship("InventoryItem")
+    received_unit = relationship("Unit")
 
 
 class ReturnRecord(Base):
