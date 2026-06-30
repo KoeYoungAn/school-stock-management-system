@@ -2018,6 +2018,46 @@ def delete_return(rid: int, db: Session = Depends(get_db),
 mv_router = APIRouter(prefix="/api/stock-movements", tags=["stock-movements"])
 
 
+def _get_movement_unit_context(db: Session, source_type: Optional[str], source_id: Optional[int]) -> Optional[dict]:
+    """Extract unit conversion context from source record (Receiving, Assignment, Return).
+    Returns dict with unit_id, unit_name, conversion_factor, quantity_display, or None if not available."""
+    if not source_type or not source_id:
+        return None
+
+    try:
+        if source_type == "Receiving":
+            rec = db.query(models.Receiving).filter(models.Receiving.id == source_id).first()
+            if rec and rec.received_unit_id:
+                return {
+                    "unit_id": rec.received_unit_id,
+                    "unit_name": rec.received_unit.name if rec.received_unit else None,
+                    "conversion_factor": rec.conversion_factor,
+                    "quantity_display": rec.received_quantity_display,
+                }
+        elif source_type == "Assignment":
+            asn = db.query(models.AssignItem).filter(models.AssignItem.id == source_id).first()
+            if asn and asn.assigned_unit_id:
+                return {
+                    "unit_id": asn.assigned_unit_id,
+                    "unit_name": asn.assigned_unit.name if asn.assigned_unit else None,
+                    "conversion_factor": asn.conversion_factor,
+                    "quantity_display": asn.assigned_quantity_display,
+                }
+        elif source_type == "Return":
+            ret = db.query(models.ReturnRecord).filter(models.ReturnRecord.id == source_id).first()
+            if ret and ret.returned_unit_id:
+                return {
+                    "unit_id": ret.returned_unit_id,
+                    "unit_name": ret.returned_unit.name if ret.returned_unit else None,
+                    "conversion_factor": ret.conversion_factor,
+                    "quantity_display": ret.returned_quantity_display,
+                }
+    except Exception:
+        pass
+
+    return None
+
+
 @mv_router.get("")
 def list_movements(page: int = 1, limit: int = 20, search: str = "",
                    movement_type: Optional[str] = None,
@@ -2043,15 +2083,34 @@ def list_movements(page: int = 1, limit: int = 20, search: str = "",
             pass # Invalid date format
     q = q.order_by(models.StockMovement.id.desc())
     items, total = paginate(q, page, limit)
-    return {"items": [{
-        "id": m.id, "item_id": m.item_id,
-        "item_name": m.item.item_name if m.item else None,
-        "item_code": m.item.item_code if m.item else None,
-        "movement_type": m.movement_type, "source_type": m.source_type,
-        "source_id": m.source_id, "quantity": m.quantity,
-        "balance_after": m.balance_after, "notes": m.notes,
-        "created_by": m.created_by, "created_at": m.created_at,
-    } for m in items], "total": total, "page": page, "limit": limit}
+
+    result_items = []
+    for m in items:
+        unit_ctx = _get_movement_unit_context(db, m.source_type, m.source_id)
+        base_unit_name = m.item.base_unit.name if m.item and m.item.base_unit else "units"
+
+        item_data = {
+            "id": m.id, "item_id": m.item_id,
+            "item_name": m.item.item_name if m.item else None,
+            "item_code": m.item.item_code if m.item else None,
+            "movement_type": m.movement_type, "source_type": m.source_type,
+            "source_id": m.source_id, "quantity": m.quantity,
+            "balance_after": m.balance_after, "notes": m.notes,
+            "created_by": m.created_by, "created_at": m.created_at,
+            "base_unit_name": base_unit_name,
+        }
+
+        if unit_ctx:
+            item_data.update({
+                "display_unit_id": unit_ctx["unit_id"],
+                "display_unit_name": unit_ctx["unit_name"],
+                "conversion_factor": unit_ctx["conversion_factor"],
+                "quantity_display": unit_ctx["quantity_display"],
+            })
+
+        result_items.append(item_data)
+
+    return {"items": result_items, "total": total, "page": page, "limit": limit}
 
 
 @mv_router.get("/{mid}")
@@ -2135,13 +2194,32 @@ def report_movements(date_from: Optional[str] = None, date_to: Optional[str] = N
         except ValueError:
             pass
     rows = q.order_by(models.StockMovement.id.desc()).limit(500).all()
-    return {"items": [{
-        "id": m.id, "item_code": m.item.item_code if m.item else None,
-        "item_name": m.item.item_name if m.item else None,
-        "movement_type": m.movement_type, "quantity": m.quantity,
-        "balance_after": m.balance_after, "source_type": m.source_type,
-        "created_at": m.created_at,
-    } for m in rows]}
+
+    result_items = []
+    for m in rows:
+        unit_ctx = _get_movement_unit_context(db, m.source_type, m.source_id)
+        base_unit_name = m.item.base_unit.name if m.item and m.item.base_unit else "units"
+
+        item_data = {
+            "id": m.id, "item_code": m.item.item_code if m.item else None,
+            "item_name": m.item.item_name if m.item else None,
+            "movement_type": m.movement_type, "quantity": m.quantity,
+            "balance_after": m.balance_after, "source_type": m.source_type,
+            "created_at": m.created_at,
+            "base_unit_name": base_unit_name,
+        }
+
+        if unit_ctx:
+            item_data.update({
+                "display_unit_id": unit_ctx["unit_id"],
+                "display_unit_name": unit_ctx["unit_name"],
+                "conversion_factor": unit_ctx["conversion_factor"],
+                "quantity_display": unit_ctx["quantity_display"],
+            })
+
+        result_items.append(item_data)
+
+    return {"items": result_items}
 
 
 @rep_router.get("/monthly-stock-summary")
@@ -2196,9 +2274,13 @@ def monthly_stock_summary(month: int, year: int, category: Optional[str] = None,
         if status and closing_status != status:
             continue
 
+        # Use base unit name for clarity (all quantities are in base units)
+        unit_display = item.base_unit.name if item.base_unit else (item.unit or "units")
+
         results.append({
             "id": item.id, "item_code": item.item_code, "item_name": item.item_name,
-            "category": item.category, "unit": item.unit,
+            "category": item.category, "unit": unit_display,
+            "base_unit_name": item.base_unit.name if item.base_unit else None,
             "opening_balance": opening, "total_received": rcv,
             "total_issued": issued, "total_returned": returned,
             "total_adjustment": adj, "closing_balance": closing,

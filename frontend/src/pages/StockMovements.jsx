@@ -32,8 +32,13 @@ export default function StockMovements() {
         { key:'created_at', label:t('date', language), render:r=>fmt(r.created_at) },
         { key:'item_name', label:t('item', language), render:r=>`${r.item_code||''} ${r.item_name||''}` },
         { key:'movement_type', label:t('type', language), render:r=> <StatusBadge value={r.movement_type}/> },
-        { key:'quantity', label:t('qty', language) },
-        { key:'balance_after', label:t('stock', language) },
+        { key:'quantity', label:t('qty', language), render:r=>{
+          if (r.display_unit_name && r.conversion_factor && r.conversion_factor > 1) {
+            return `${r.quantity_display} ${r.display_unit_name} (${r.quantity} ${r.base_unit_name})`;
+          }
+          return `${r.quantity} ${r.base_unit_name || 'units'}`;
+        }},
+        { key:'balance_after', label:t('stock', language), render:r=>`${r.balance_after} ${r.base_unit_name || 'units'}` },
         { key:'source_type', label:t('type', language) },
         { key:'notes', label:t('notes', language) },
       ]} rows={rows} loading={loading} emptyTitle={t('noMovements', language)}/>

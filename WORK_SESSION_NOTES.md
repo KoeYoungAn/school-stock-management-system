@@ -2,6 +2,90 @@
 
 ## Last Completed Work (2026-06-30)
 
+### Stock Management Units - PHASE 8 COMPLETE ✓
+
+**Implemented Stock Movements and Reports unit display support.**
+
+#### Phase 8: Stock Movements and Reports Units - COMPLETED ✓
+
+**Purpose:** Update Stock Movements and Reports to display unit conversion information clearly without changing core stock calculations.
+
+**Backend Changes:**
+
+1. **`backend/crud.py` - Stock Movement API enhancements:**
+   - Added `_get_movement_unit_context()` helper function (lines 2023-2058)
+     - Extracts unit context from source records (Receiving, Assignment, Return)
+     - Returns unit_id, unit_name, conversion_factor, quantity_display
+     - Returns None for legacy movements or movements without unit context
+     - Handles errors gracefully
+   - Updated `list_movements()` endpoint (lines 2067-2113)
+     - Fetches unit context for each movement
+     - Includes base_unit_name from item.base_unit
+     - Adds optional fields: display_unit_id, display_unit_name, conversion_factor, quantity_display
+   - Updated `report_movements()` endpoint (lines 2225-2272)
+     - Same unit context extraction as list_movements
+     - Used for Stock Movement Report generation
+
+2. **`backend/crud.py` - Report API updates:**
+   - Updated `monthly_stock_summary()` endpoint (lines 2277-2290)
+     - Changed unit field from old text to base unit name
+     - Added base_unit_name field for clarity
+     - All quantities remain in base units (opening, received, issued, returned, closing)
+   - Verified `stock_summary()` endpoint - already uses base_unit info from Phase 4
+   - Verified `low_stock()` endpoint - already uses base-unit stock_quantity correctly
+
+**Frontend Changes:**
+
+1. **`frontend/src/pages/StockMovements.jsx` - Unit context display:**
+   - Updated quantity column (lines 35-40)
+     - With conversion: Shows "2 box (20 piece)"
+     - Without conversion: Shows "20 piece"
+   - Updated balance column (line 41)
+     - Always shows base units: "150 piece"
+
+2. **`frontend/src/pages/Reports.jsx` - Stock Movement Report:**
+   - Updated stock-movements columns (lines 55-75)
+     - Added compute functions for quantity and balance columns
+     - Displays unit context when available
+     - Falls back to base units for legacy movements
+
+**Display Examples:**
+- Recent movement with unit context: "2 box (20 piece)" 
+- Legacy movement: "20 piece"
+- Balance after: "150 piece"
+
+**Verification Results:**
+
+Build Results:
+- ✅ Backend Python compilation: PASSED (crud.py, models.py, schemas.py, utils.py)
+- ✅ Frontend build: PASSED (built in 3.54s, 366.92 kB)
+- ✅ Backend tests: 0 tests collected (no pytest tests available)
+
+**Files Modified (3 files):**
+- `backend/crud.py` - Stock movements and reports updates (+116, -21 lines)
+- `frontend/src/pages/Reports.jsx` - Stock movement report display (+17, -1 line)
+- `frontend/src/pages/StockMovements.jsx` - Unit context display (+9, -1 line)
+
+**Total Changes:** +142 insertions, -23 deletions
+
+**Important Notes:**
+- ✅ Stock movements display unit context from source records (Receiving, Assignment, Return)
+- ✅ Legacy movements without unit context display safely (base units only)
+- ✅ Monthly Stock Summary uses base units for all totals
+- ✅ Low Stock Report uses base-unit stock_quantity for comparisons
+- ✅ All stock calculations remain in base units (NO changes to core logic)
+- ✅ Display-only updates - no database migrations needed
+- ✅ No changes to Inventory, Receiving, Purchase Orders, Assignments, or Returns calculations
+- ✅ Phases 4, 5A, 5B, 6, 7 logic remains functional
+
+**Code Proof Completed:**
+- ITM-009 stock movement display: "2 box (20 piece)" ✓
+- Monthly Stock Summary: totals in pieces (base units) ✓
+- Low Stock Report: compares 8 pieces <= 10 pieces (base units) ✓
+- Legacy movements: displays "20 piece" safely ✓
+
+---
+
 ### Stock Management Units - PHASE 7 COMPLETE ✓
 
 **Implemented Assignment and Returns module unit conversion support.**

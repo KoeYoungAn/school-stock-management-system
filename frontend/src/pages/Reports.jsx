@@ -58,8 +58,21 @@ const REPORT_COLUMNS = {
     { key: 'item_name', label: 'Item Name' },
     { key: 'movement_type', label: 'Movement Type' },
     { key: 'source_type', label: 'Reference Type' },
-    { key: 'quantity', label: 'Quantity' },
-    { key: 'balance_after', label: 'Balance After' },
+    {
+      key: 'quantity',
+      label: 'Quantity',
+      compute: (row) => {
+        if (row.display_unit_name && row.conversion_factor && row.conversion_factor > 1) {
+          return `${row.quantity_display} ${row.display_unit_name} (${row.quantity} ${row.base_unit_name})`;
+        }
+        return `${row.quantity} ${row.base_unit_name || 'units'}`;
+      }
+    },
+    {
+      key: 'balance_after',
+      label: 'Balance After',
+      compute: (row) => `${row.balance_after} ${row.base_unit_name || 'units'}`
+    },
   ],
   'purchase-orders': [
     { key: 'po_number', label: 'PO Number' },
