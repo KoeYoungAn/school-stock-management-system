@@ -960,8 +960,8 @@ def create_assignment(payload: schemas.AssignCreate,
 
     # Validate against available stock (only if status will reduce stock)
     if payload.status in REDUCING:
-        if base_quantity > item.quantity:
-            raise HTTPException(400, f"Insufficient stock. Available: {item.quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}, Requested: {base_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}")
+        if base_quantity > item.stock_quantity:
+            raise HTTPException(400, f"Insufficient stock. Available: {item.stock_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}, Requested: {base_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}")
 
     # Create assignment record with unit context
     a = models.AssignItem(

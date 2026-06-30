@@ -236,6 +236,70 @@ python -m pytest
 
 ---
 
+## AUTOMATED QA AND BUG FIX (2026-07-01)
+
+### Critical Bug Found and Fixed ✓
+
+**Bug:** Assignment stock validation used wrong field name
+- **Location:** `backend/crud.py:963-964`
+- **Issue:** Used `item.quantity` instead of `item.stock_quantity`
+- **Root Cause:** InventoryItem model has `stock_quantity` field, not `quantity`
+- **Impact:** Over-assignment validation would fail with AttributeError when triggered
+- **Severity:** CRITICAL - Could allow stock to go negative if validation failed
+- **Status:** FIXED (changed to `item.stock_quantity`)
+
+**Change:**
+```python
+# Before (INCORRECT):
+if base_quantity > item.quantity:
+    raise HTTPException(400, f"Insufficient stock. Available: {item.quantity}...")
+
+# After (FIXED):
+if base_quantity > item.stock_quantity:
+    raise HTTPException(400, f"Insufficient stock. Available: {item.stock_quantity}...")
+```
+
+**Files Modified:** 1 file
+- `backend/crud.py` (+2, -2 lines)
+
+### Automated QA Results (2026-07-01)
+
+**Build Verification:**
+- ✅ Backend compilation: PASSED (after fix)
+- ✅ Frontend build: PASSED (3.16s, 366.92 kB)
+- ⚠️ Backend tests: 17 collected / 3 errors (known pre-Phase 5 schema issues, NOT regressions)
+
+**Static Code Review Completed:**
+- ✅ No additional `quantity` vs `stock_quantity` mistakes found
+- ✅ All unit_id fields present (ordered_unit_id, assigned_unit_id, returned_unit_id, received_unit_id)
+- ✅ Proper optional chaining in frontend (`?.base_unit`, `?.conversions`)
+- ✅ Over-receiving validation in place (backend/crud.py:1402-1406)
+- ✅ Over-assignment validation FIXED (backend/crud.py:963)
+- ✅ Return-to-stock logic correct (backend/crud.py:1947-1953, condition == "Good")
+- ✅ Unit dropdowns safely populated
+- ✅ Conversion preview calculations correct
+- ✅ Phase 8 stock movements display logic safe (null checks present)
+- ✅ Reports use base units correctly
+
+**Known Test Issues (Pre-existing, NOT Phase 8 regressions):**
+1. `test_direct_receipt.py` - Uses old schema (missing `received_unit_id`, `quantity_received`)
+2. `test_phase2_units.py` - Missing `httpx` module dependency
+3. `test_receiving.py` - Uses old schema (pre-Phase 5B)
+
+### Manual QA Still Required
+
+**IMPORTANT:** Automated QA and static code review are complete, but **manual browser testing is required** before deployment.
+
+The bug fix ensures over-assignment validation will work correctly, but manual testing is needed to verify:
+1. The validation triggers correctly when over-assigning
+2. Error message displays properly
+3. UI handles the error gracefully
+4. Stock remains accurate after validation rejection
+
+**See "Required Manual QA Workflow" section above for complete 8-step test checklist.**
+
+---
+
 ### Stock Management Units - PHASE 7 COMPLETE ✓
 
 **Implemented Assignment and Returns module unit conversion support.**
