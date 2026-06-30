@@ -20,10 +20,11 @@ import { required, selectRequired, positiveNumber } from '../utils/validation.js
 
 const assignmentSchema = {
   item_id: [selectRequired('Item')],
+  assigned_unit_id: [selectRequired('Unit')],
   quantity: [required('Quantity'), positiveNumber('Quantity')]
 }
 
-const blank = { item_id:'', quantity:1, assign_type:'Department', reference_id:'', assigned_user_id:'', status:'Pending', notes:'' }
+const blank = { item_id:'', assigned_unit_id:'', quantity:1, assign_type:'Department', reference_id:'', assigned_user_id:'', status:'Pending', notes:'' }
 
 export default function Assignments() {
   const { user } = useAuth(); const toast = useToast()
@@ -36,6 +37,8 @@ export default function Assignments() {
   const [form,setForm]=useState(blank); const [del,setDel]=useState(null)
   const [viewDetail, setViewDetail] = useState(null)
   const [items,setItems]=useState([]); const [users,setUsers]=useState([]); const [deps,setDeps]=useState([])
+  const [units, setUnits] = useState([])
+  const [selectedItemDetails, setSelectedItemDetails] = useState(null)
   const { errors, validateAll, handleBlur, clearErrors, hasErrors } = useValidation(assignmentSchema)
 
   const load = async () => {
@@ -49,22 +52,45 @@ export default function Assignments() {
   useEffect(()=>{
     api.get('/api/inventory?limit=500').then(r=>setItems(r.data.items)).catch(()=>{})
     api.get('/api/departments?limit=500').then(r=>setDeps(r.data.items)).catch(()=>{})
+    api.get('/api/units?limit=200').then(r=>setUnits(r.data.items)).catch(()=>{})
     if (can(user,'manage_users')) api.get('/api/users?limit=500').then(r=>setUsers(r.data.items)).catch(()=>{})
   },[])
 
-  const openNew = () => { setEdit(null); setForm({ ...blank, assign_type: 'Department' }); clearErrors(); setOpen(true) }
-  const openEdit = (r) => { setEdit(r); setForm({...r, reference_id:r.reference_id||'', assigned_user_id:r.assigned_user_id||''}); clearErrors(); setOpen(true) }
+  // Fetch item details with conversions when item_id changes
+  useEffect(() => {
+    if (form.item_id) {
+      api.get(`/api/inventory/${form.item_id}`).then(r => {
+        setSelectedItemDetails(r.data)
+        // Auto-select base unit if no unit selected yet
+        if (!form.assigned_unit_id && r.data.base_unit_id) {
+          setForm(prev => ({ ...prev, assigned_unit_id: r.data.base_unit_id }))
+        }
+      }).catch(() => setSelectedItemDetails(null))
+    } else {
+      setSelectedItemDetails(null)
+    }
+  }, [form.item_id])
+
+  const openNew = () => { setEdit(null); setForm({ ...blank, assign_type: 'Department' }); setSelectedItemDetails(null); clearErrors(); setOpen(true) }
+  const openEdit = (r) => { setEdit(r); setForm({...r, reference_id:r.reference_id||'', assigned_user_id:r.assigned_user_id||'', assigned_unit_id:r.assigned_unit_id||''}); clearErrors(); setOpen(true) }
   const submit = async (e) => {
     e.preventDefault()
     const { isValid } = validateAll(form)
     if (!isValid) { toast.error('Please fix validation errors'); return }
     try {
-      const payload = {...form, item_id:Number(form.item_id), quantity:Number(form.quantity)}
+      const payload = {...form, item_id:Number(form.item_id), assigned_unit_id:Number(form.assigned_unit_id), quantity:Number(form.quantity)}
       if (payload.reference_id==='') payload.reference_id=null; else payload.reference_id=Number(payload.reference_id)
       if (payload.assigned_user_id==='') payload.assigned_user_id=null; else payload.assigned_user_id=Number(payload.assigned_user_id)
       if (edit) await api.put(`/api/assignments/${edit.id}`, payload)
-      else await api.post('/api/assignments', payload)
-      toast.success('Saved'); setOpen(false); load()
+      else {
+        const res = await api.post('/api/assignments', payload)
+        if (res.data.conversion_display) {
+          toast.success(`Assignment created: ${res.data.conversion_display}`)
+        } else {
+          toast.success('Assignment created')
+        }
+      }
+      setOpen(false); load()
     } catch(e){toast.error(errMsg(e))}
   }
   const remove = async () => {
@@ -110,12 +136,76 @@ export default function Assignments() {
       <DataTable columns={columns} rows={rows} loading={loading} emptyTitle={t('noAssignments', language)}/>
       <Pagination page={page} limit={limit} total={total} onPage={setPage} onLimit={setLimit}/>
       <Modal open={open} onClose={()=>setOpen(false)} title={edit ? t('editAssignment', language) : t('newAssignment', language)} size="lg">
-        <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <SelectInput label={t('item', language)} required value={form.item_id} onChange={e=>setForm({...form,item_id:e.target.value})}
-            options={[{value:'',label:'— Select —'}, ...items.map(i=>({value:i.id,label:`${i.item_code} ${i.item_name} (stock ${i.stock_quantity})`}))]}
-            error={errors.item_id} onBlur={e=>handleBlur('item_id', e.target.value)}/>
-          <FormInput type="number" min="1" label={t('quantity', language)} required value={form.quantity} onChange={e=>setForm({...form,quantity:e.target.value})}
-            error={errors.quantity} onBlur={e=>handleBlur('quantity', e.target.value)}/>
+        <form onSubmit={submit} className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="sm:col-span-2">
+              <SelectInput label={t('item', language)} required value={form.item_id} onChange={e=>setForm({...form,item_id:e.target.value})}
+                options={[{value:'',label:'— Select —'}, ...items.map(i=>({value:i.id,label:`${i.item_code} ${i.item_name} (stock ${i.stock_quantity || 0})`}))]}
+                error={errors.item_id} onBlur={e=>handleBlur('item_id', e.target.value)}/>
+            </div>
+            <SelectInput label="Unit" required value={form.assigned_unit_id} onChange={e=>setForm({...form,assigned_unit_id:e.target.value})}
+              options={[
+                {value:'',label:'— Select Unit —'},
+                ...(selectedItemDetails?.base_unit ? [{value:selectedItemDetails.base_unit_id, label:`${selectedItemDetails.base_unit.name} (Base Unit)`}] : []),
+                ...(selectedItemDetails?.conversions || []).map(c => ({
+                  value: c.purchase_unit_id,
+                  label: `${c.purchase_unit_name} (1 = ${c.conversion_factor} ${selectedItemDetails.base_unit?.abbreviation || 'units'})`
+                }))
+              ]}
+              error={errors.assigned_unit_id} onBlur={e=>handleBlur('assigned_unit_id', e.target.value)}
+              disabled={!selectedItemDetails}/>
+            <FormInput type="number" min="1" label={t('quantity', language)} required value={form.quantity} onChange={e=>setForm({...form,quantity:e.target.value})}
+              error={errors.quantity} onBlur={e=>handleBlur('quantity', e.target.value)}/>
+          </div>
+
+          {/* Conversion Preview */}
+          {selectedItemDetails && form.assigned_unit_id && form.quantity && (() => {
+            const selectedUnit = form.assigned_unit_id == selectedItemDetails.base_unit_id
+              ? selectedItemDetails.base_unit
+              : selectedItemDetails.conversions?.find(c => c.purchase_unit_id == form.assigned_unit_id)?.purchase_unit
+            const conversionFactor = form.assigned_unit_id == selectedItemDetails.base_unit_id
+              ? 1
+              : selectedItemDetails.conversions?.find(c => c.purchase_unit_id == form.assigned_unit_id)?.conversion_factor || 1
+            const baseQuantity = Number(form.quantity) * conversionFactor
+            const availableStock = selectedItemDetails.stock_quantity || 0
+            const exceeds = baseQuantity > availableStock
+
+            return (
+              <div className={`p-3 rounded-lg border ${exceeds ? 'bg-red-50 dark:bg-red-900/20 border-red-300 dark:border-red-700' : 'bg-blue-50 dark:bg-blue-900/20 border-blue-300 dark:border-blue-700'}`}>
+                <div className="text-sm font-medium">
+                  {conversionFactor > 1 && (
+                    <div className="mb-1">{form.quantity} {selectedUnit?.name || 'units'} = {baseQuantity} {selectedItemDetails.base_unit?.abbreviation || 'units'}</div>
+                  )}
+                  <div className={exceeds ? 'text-red-700 dark:text-red-300' : ''}>
+                    Available stock: {availableStock} {selectedItemDetails.base_unit?.abbreviation || 'units'}
+                    {exceeds && <span className="ml-2 font-bold">⚠ Insufficient stock!</span>}
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <SelectInput label={t('type', language)} value={form.assign_type} onChange={e=>setForm({...form,assign_type:e.target.value})} options={ASSIGN_TYPES}/>
+            {form.assign_type==='Department' && (
+              <SelectInput label={t('department', language)} value={form.reference_id} onChange={e=>setForm({...form,reference_id:e.target.value})}
+                options={[{value:'',label:'— None —'}, ...deps.map(d=>({value:d.id,label:d.department_name}))]}/>
+            )}
+            <SelectInput label={t('assignedUser', language)} value={form.assigned_user_id} onChange={e=>setForm({...form,assigned_user_id:e.target.value})}
+              options={[{value:'',label:'— None —'}, ...users.map(u=>({value:u.id,label:`${u.full_name} (${u.role})`}))]}/>
+            <SelectInput label={t('status', language)} value={form.status} onChange={e=>setForm({...form,status:e.target.value})} options={ASSIGN_STATUSES}/>
+          </div>
+
+          <label className="block">
+            <span className="block text-sm font-medium mb-1">{t('notes', language)}</span>
+            <textarea value={form.notes||''} onChange={e=>setForm({...form,notes:e.target.value})} rows="2"
+              className="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"/>
+          </label>
+
+          <div className="flex justify-end gap-2">
+            <button type="button" onClick={()=>setOpen(false)} className="px-3 py-2 rounded-lg border border-gray-300 dark:border-gray-600">{t('cancel', language)}</button>
+            <button disabled={hasErrors} className="px-3 py-2 rounded-lg bg-blue-600 text-white disabled:opacity-50 disabled:cursor-not-allowed">{t('save', language)}</button>
+          </div>
           <SelectInput label={t('type', language)} value={form.assign_type} onChange={e=>setForm({...form,assign_type:e.target.value})} options={ASSIGN_TYPES}/>
           {form.assign_type==='Department' && (
             <SelectInput label={t('department', language)} value={form.reference_id} onChange={e=>setForm({...form,reference_id:e.target.value})}
@@ -157,7 +247,15 @@ export default function Assignments() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">{t('quantity', language)}</label>
-                <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{viewDetail.quantity}</div>
+                <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                  {viewDetail.assigned_quantity_display && viewDetail.conversion_factor > 1 ? (
+                    <span title={`${viewDetail.assigned_quantity_display} ${viewDetail.assigned_unit_name || 'units'} = ${viewDetail.quantity} base units`}>
+                      {viewDetail.assigned_quantity_display} {viewDetail.assigned_unit_name || 'units'} ({viewDetail.quantity})
+                    </span>
+                  ) : (
+                    <span>{viewDetail.quantity}</span>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">{t('assignmentType', language)}</label>
