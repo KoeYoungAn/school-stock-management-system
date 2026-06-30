@@ -1,0 +1,10 @@
+{
+  "model": "kr/claude-sonnet-4.5-agentic",
+  "max_tokens": 50,
+  "messages": [
+    {
+      "role": "user",
+      "content": "Reply OK only"
+    }
+  ]
+}

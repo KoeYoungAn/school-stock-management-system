@@ -2,6 +2,80 @@
 
 ## Last Completed Work (2026-06-30)
 
+### Stock Management Units - PHASE 5B COMPLETE ✓
+
+**Implemented Receive from PO unit conversion support for Receiving module.**
+
+#### Phase 5B: Receive from PO Unit Conversion - COMPLETED ✓
+
+**Backend Changes:**
+
+1. **`backend/schemas.py` - ReceiveMoreRequest schema:**
+   - Changed from `additional_quantity` to `received_unit_id` + `quantity_received`
+   - `received_unit_id` (int) - Unit selected for receipt (base or purchase unit)
+   - `quantity_received` (int) - Quantity in the selected unit
+
+2. **`backend/crud.py` - receive_more() endpoint:**
+   - Updated with complete unit conversion support (lines 1245-1368)
+   - Validates `received_unit_id` (must be base unit or configured purchase unit)
+   - Gets conversion factor using existing `get_conversion_factor()` helper
+   - Calculates `base_quantity = quantity_received × conversion_factor`
+   - Validates base_quantity against remaining PO quantity (in base units)
+   - Stores conversion context (received_unit_id, conversion_factor, received_quantity_display)
+   - Updates inventory stock using `base_quantity` only
+   - Returns `conversion_display` and `new_stock` in response
+
+**Frontend Changes:**
+
+1. **`frontend/src/pages/Receiving.jsx` - Receive from PO modal:**
+   - Added `received_unit_id` to validation schema and form state
+   - Added `receivePOItemDetails` state for storing item details with conversions
+   - Added `useEffect` to fetch item details when `formPO.item_id` changes
+   - Added unit dropdown showing base unit + purchase unit conversions with factors
+   - Added conversion preview with real-time calculation:
+     - Shows "X units = Y base units" (or just "X units" if factor = 1)
+     - Turns red if quantity exceeds remaining PO quantity
+     - Shows remaining quantity validation
+   - Updated `submitReceivePO()` to:
+     - Calculate base quantity using conversion factor
+     - Validate base quantity against remaining PO quantity
+     - Include `received_unit_id` in payload when not in edit mode
+     - Display conversion info in success toast
+   - Edit mode does NOT support unit conversion (correction only uses existing data)
+
+**Verification Results:**
+
+Database State Verified:
+- ✅ ITM-009 notebook: Stock 130 pieces, Base unit: piece (pcs)
+- ✅ Conversion: 1 box = 10 pieces (default purchase unit)
+- ✅ PO history shows successful receiving with status updates
+
+Build Results:
+- ✅ Backend Python compilation: PASSED (crud.py, schemas.py, models.py, utils.py)
+- ✅ Frontend build: PASSED (built in 3.53s, 355.91 kB)
+
+**Files Modified (3 files):**
+- `backend/crud.py` - Updated receive_more() endpoint (+160, -105 lines)
+- `backend/schemas.py` - Updated ReceiveMoreRequest schema (+3, -1 line)
+- `frontend/src/pages/Receiving.jsx` - Added unit conversion UI (+109, -9 lines)
+
+**Functional Proof:**
+- ✅ ITM-009 PO receiving works with box units (1 box = 10 pieces)
+- ✅ Stock increases in base units (pieces)
+- ✅ Over-receiving rejected with proper validation
+- ✅ PO status updates correctly (Partially Received, Received)
+- ✅ Direct Stock Receipt from Phase 5A still works
+
+**Important Notes:**
+- ✅ Edit mode for existing receiving records does NOT support unit conversion
+- ✅ Only new PO receiving supports unit selection (not corrections)
+- ✅ Phase 5A (Direct Stock Receipt) remains unchanged and functional
+- ✅ No changes to Purchase Orders module (Phase 6)
+- ✅ No changes to Assignments, Returns, Reports, Stock Movements
+- ✅ Old `unit` field in Receiving model preserved
+
+---
+
 ### Stock Management Units - PHASE 5A COMPLETE ✓
 
 **Implemented Direct Stock Receipt unit conversion support for Receiving module.**

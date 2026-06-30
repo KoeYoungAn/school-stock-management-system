@@ -1245,77 +1245,127 @@ def delete_po_item(item_id: int, db: Session = Depends(get_db),
 def receive_more(poi_id: int, payload: schemas.ReceiveMoreRequest,
                  db: Session = Depends(get_db),
                  user: models.User = Depends(require_staff)):
-    """Add additional quantity to an existing PO item.
+    """Add additional quantity to an existing PO item with unit conversion support.
 
     This is specifically for receiving MORE items on top of what's already received.
+    Supports receiving in base unit or configured purchase units.
     Creates a new receiving record, updates the PO item received quantity,
     updates inventory stock, and creates a stock movement log.
+
+    Phase 5B: Receive from PO Unit Conversion Support
     """
-    # 1. Find PO item
-    poi = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == poi_id).first()
-    if not poi:
-        raise HTTPException(404, "Purchase order item not found")
+    try:
+        # 1. Find PO item
+        poi = db.query(models.PurchaseOrderItem).filter(models.PurchaseOrderItem.id == poi_id).first()
+        if not poi:
+            raise HTTPException(404, "Purchase order item not found")
 
-    # 1.5. Find associated Purchase Order and validate its status
-    po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == poi.purchase_order_id).first()
-    if not po:
-        raise HTTPException(404, "Associated Purchase Order not found")
-    if po.status not in ("Approved", "Partially Received"):
-        raise HTTPException(400, f"Cannot receive stock for a Purchase Order with status '{po.status}'. Only Approved or Partially Received purchase orders can receive stock.")
+        # 2. Find associated Purchase Order and validate its status
+        po = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == poi.purchase_order_id).first()
+        if not po:
+            raise HTTPException(404, "Associated Purchase Order not found")
+        if po.status not in ("Approved", "Partially Received"):
+            raise HTTPException(400, f"Cannot receive stock for a Purchase Order with status '{po.status}'. Only Approved or Partially Received purchase orders can receive stock.")
 
-    # 2. Validate
-    if payload.additional_quantity <= 0:
-        raise HTTPException(400, "Additional quantity must be positive")
+        # 3. Find item with base_unit and conversions relationships
+        from sqlalchemy.orm import joinedload
+        item = db.query(models.InventoryItem).options(
+            joinedload(models.InventoryItem.base_unit),
+            joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit)
+        ).filter(models.InventoryItem.id == poi.item_id).first()
+        if not item:
+            raise HTTPException(404, "Item not found")
 
-    already_received = poi.quantity_received or 0
-    remaining = poi.quantity_ordered - already_received
-    if payload.additional_quantity > remaining:
-        raise HTTPException(400, f"Cannot receive more than remaining quantity ({remaining})")
+        # 4. Validate received_unit_id and get conversion factor
+        received_unit_id = payload.received_unit_id
+        quantity_in_unit = payload.quantity_received
 
-    # 3. Find item
-    item = db.query(models.InventoryItem).filter(models.InventoryItem.id == poi.item_id).first()
-    if not item:
-        raise HTTPException(404, "Item not found")
+        if quantity_in_unit <= 0:
+            raise HTTPException(400, "Quantity must be positive")
 
-    # 4. Create new receiving record
-    r = models.Receiving(
-        receiving_number=gen_receiving_number(db),
-        purchase_order_id=poi.purchase_order_id,
-        purchase_order_item_id=poi_id,
-        item_id=poi.item_id,
-        quantity_received=payload.additional_quantity,
-        receiver_name=payload.receiver_name,
-        status=payload.status,
-        notes=payload.notes,
-    )
-    db.add(r)
-    db.flush()
+        # Check if received_unit is the item's base unit
+        if item.base_unit_id and received_unit_id == item.base_unit_id:
+            conversion_factor = 1
+            received_unit_name = item.base_unit.name if item.base_unit else "unit"
+        else:
+            # Get conversion factor using helper from utils.py
+            from utils import get_conversion_factor
+            conversion_factor = get_conversion_factor(db, item.id, received_unit_id)
+            if not conversion_factor or conversion_factor <= 0:
+                raise HTTPException(400,
+                    f"Invalid unit for this item. Selected unit must be the item's base unit or a configured purchase unit with a valid conversion.")
 
-    # 5. Update inventory and PO item (only if status is "Received")
-    if payload.status == "Received":
-        # Update inventory stock and create movement log
-        record_movement(db, item, "IN", payload.additional_quantity,
-                        "Receiving", r.id, user.id,
-                        f"Receiving additional quantity {r.receiving_number}")
+            # Get received unit name for display
+            received_unit = db.query(models.Unit).filter(models.Unit.id == received_unit_id).first()
+            received_unit_name = received_unit.name if received_unit else "unit"
 
-        # Update PO item received quantity
-        poi.quantity_received = (poi.quantity_received or 0) + payload.additional_quantity
+        # 5. Calculate base quantity from the selected unit
+        base_quantity = quantity_in_unit * conversion_factor
 
-    db.commit()
+        # 6. Validate against remaining quantity (in base units)
+        already_received = poi.quantity_received or 0
+        remaining = poi.quantity_ordered - already_received
+        if base_quantity > remaining:
+            raise HTTPException(400, f"Cannot receive more than remaining quantity. Remaining: {remaining} base units (equivalent to {remaining // conversion_factor} {received_unit_name})")
 
-    # 6. Refresh PO status
-    _refresh_po_status(db, poi.purchase_order_id)
+        # 7. Build conversion display
+        if conversion_factor == 1:
+            conversion_display = f"{quantity_in_unit} {received_unit_name}"
+        else:
+            base_unit_name = item.base_unit.name if item.base_unit else "units"
+            conversion_display = f"{quantity_in_unit} {received_unit_name} = {base_quantity} {base_unit_name}"
 
-    # 7. Audit log
-    log_audit(db, user.id, "receive_more", "po_items", poi_id,
-              f"Received additional {payload.additional_quantity} items for PO item {poi_id}")
+        # 8. Create new receiving record
+        r = models.Receiving(
+            receiving_number=gen_receiving_number(db),
+            purchase_order_id=poi.purchase_order_id,
+            purchase_order_item_id=poi_id,
+            item_id=poi.item_id,
+            quantity_received=base_quantity,  # Always store base quantity
+            received_unit_id=received_unit_id,  # Store selected unit
+            conversion_factor=conversion_factor,  # Store conversion snapshot
+            received_quantity_display=quantity_in_unit,  # Store original quantity in selected unit
+            receiver_name=payload.receiver_name,
+            status=payload.status,
+            notes=payload.notes,
+        )
+        db.add(r)
+        db.flush()
 
-    return {
-        "id": r.id,
-        "receiving_number": r.receiving_number,
-        "new_total_received": poi.quantity_received,
-        "remaining": poi.quantity_ordered - poi.quantity_received
-    }
+        # 9. Update inventory and PO item (only if status is "Received")
+        if payload.status == "Received":
+            # Update inventory stock and create movement log with conversion display
+            record_movement(db, item, "IN", base_quantity,
+                            "Receiving", r.id, user.id,
+                            f"Receiving from PO {r.receiving_number}: {conversion_display}")
+
+            # Update PO item received quantity (in base units)
+            poi.quantity_received = (poi.quantity_received or 0) + base_quantity
+
+        db.commit()
+
+        # 10. Refresh PO status
+        _refresh_po_status(db, poi.purchase_order_id)
+
+        # 11. Audit log
+        log_audit(db, user.id, "receive_more", "po_items", poi_id,
+                  f"Received {conversion_display} for PO item {poi_id}")
+
+        return {
+            "id": r.id,
+            "receiving_number": r.receiving_number,
+            "quantity_display": quantity_in_unit,
+            "unit_name": received_unit_name,
+            "base_quantity": base_quantity,
+            "conversion_display": conversion_display,
+            "new_total_received": poi.quantity_received,
+            "remaining": poi.quantity_ordered - poi.quantity_received
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(500, f"Receive more failed: {str(e)}")
 
 
 # ============================================================

@@ -337,7 +337,8 @@ class ReceivingUpdate(BaseModel):
 
 
 class ReceiveMoreRequest(BaseModel):
-    additional_quantity: int = Field(gt=0)
+    received_unit_id: int  # Unit selected for receipt (base unit or purchase unit)
+    quantity_received: int = Field(gt=0)  # Quantity in the selected unit
     receiver_name: str
     status: str = "Received"
     notes: Optional[str] = None

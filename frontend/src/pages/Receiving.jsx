@@ -22,6 +22,7 @@ const receivingSchema = {
   purchase_order_id: [selectRequired('Purchase Order')],
   purchase_order_item_id: [selectRequired('PO Line Item')],
   item_id: [selectRequired('Item')],
+  received_unit_id: [selectRequired('Unit')],
   quantity_received: [required('Quantity'), positiveNumber('Quantity')],
   receiver_name: [required('Receiver Name')]
 }
@@ -35,7 +36,7 @@ const directReceiptSchema = {
   receiver_name: [required('Receiver Name')],
 }
 
-const blankReceivePO = { purchase_order_id:'', purchase_order_item_id:'', item_id:'', quantity_received:1, receiver_name:'', status:'Received', notes:'' }
+const blankReceivePO = { purchase_order_id:'', purchase_order_item_id:'', item_id:'', received_unit_id:'', quantity_received:1, receiver_name:'', status:'Received', notes:'' }
 const blankDirectReceipt = { item_id: '', received_unit_id: '', quantity_received: 1, source: '', reason: '', receiver_name: '', notes: '' }
 
 export default function Receiving() {
@@ -47,7 +48,8 @@ export default function Receiving() {
   const [formPO,setFormPO]=useState(blankReceivePO); const [del,setDel]=useState(null)
   const [pos,setPos]=useState([]); const [items,setItems]=useState([])
   const [units, setUnits] = useState([]) // New: to store all units
-  const [selectedItemDetails, setSelectedItemDetails] = useState(null) // New: for direct receipt item details
+  const [selectedItemDetails, setSelectedItemDetails] = useState(null) // For direct receipt item details
+  const [receivePOItemDetails, setReceivePOItemDetails] = useState(null) // For receive from PO item details
   const [directReceiptOpen, setDirectReceiptOpen] = useState(false)
   const [directReceiptForm, setDirectReceiptForm] = useState(blankDirectReceipt)
 
@@ -78,6 +80,14 @@ export default function Receiving() {
     }
   }, [directReceiptForm.item_id])
 
+  useEffect(() => {
+    if (formPO.item_id && !edit) {
+      api.get(`/api/inventory/${formPO.item_id}`).then(r => setReceivePOItemDetails(r.data)).catch(()=>{})
+    } else {
+      setReceivePOItemDetails(null)
+    }
+  }, [formPO.item_id, edit])
+
   const receivablePOs = pos.filter(po =>
     ['Approved', 'Partially Received'].includes(po.status) &&
     (po.items || []).some(i => (i.quantity_ordered - (i.quantity_received || 0)) > 0)
@@ -104,10 +114,28 @@ export default function Receiving() {
     e.preventDefault()
     const { isValid } = validateAll(formPO)
     if (!isValid) { toast.error('Please fix validation errors'); return }
-    if (!edit && remainingQty !== null && Number(formPO.quantity_received) > remainingQty) {
-      toast.error(`Cannot exceed remaining quantity (${remainingQty})`)
-      return
+
+    // Phase 5B: Calculate base quantity for validation when not in edit mode
+    if (!edit && remainingQty !== null && receivePOItemDetails) {
+      const qty = Number(formPO.quantity_received)
+      const selectedUnitId = Number(formPO.received_unit_id)
+      const baseUnitId = receivePOItemDetails.base_unit?.id
+
+      let conversionFactor = 1
+      if (selectedUnitId === baseUnitId) {
+        conversionFactor = 1
+      } else {
+        const conv = (receivePOItemDetails.conversions || []).find(c => c.purchase_unit_id === selectedUnitId)
+        if (conv) conversionFactor = conv.conversion_factor
+      }
+
+      const baseQuantity = qty * conversionFactor
+      if (baseQuantity > remainingQty) {
+        toast.error(`Cannot exceed remaining quantity (${remainingQty} ${receivePOItemDetails.base_unit?.name || 'units'})`)
+        return
+      }
     }
+
     try {
       const payload = {...formPO,
         item_id:Number(formPO.item_id),
@@ -115,13 +143,21 @@ export default function Receiving() {
         purchase_order_id:Number(formPO.purchase_order_id),
         purchase_order_item_id:Number(formPO.purchase_order_item_id),
       }
+
+      // Phase 5B: Include received_unit_id when not in edit mode
+      if (!edit) {
+        payload.received_unit_id = Number(formPO.received_unit_id)
+      }
+
       if (edit) {
         if (!confirm('Are you sure you want to correct this receiving record? This is for fixing errors in existing records.')) return
         await api.put(`/api/receiving/${edit.id}`, payload)
+        toast.success('Correction saved')
       } else {
-        await api.post('/api/receiving', payload)
+        const r = await api.post('/api/receiving', payload)
+        const conversionMsg = r.data.conversion_display ? ` (${r.data.conversion_display})` : ''
+        toast.success(`PO receiving saved${conversionMsg}. New stock: ${r.data.new_stock || 'updated'}`)
       }
-      toast.success(edit ? 'Correction saved' : 'PO receiving saved')
       setOpenPO(false)
       load()
       loadPOs().catch(()=>{})
@@ -239,6 +275,18 @@ export default function Receiving() {
             disabled={true}
             options={[{value:'',label:'— Select PO Line Item First —'}, ...items.map(i=>({value:i.id,label:`${i.item_code} ${i.item_name}`}))]}
             error={errors.item_id} onBlur={e=>handleBlur('item_id', e.target.value)}/>
+
+          {receivePOItemDetails && !edit && (
+            <SelectInput label="Unit" required value={formPO.received_unit_id}
+              onChange={e=>setFormPO({...formPO,received_unit_id:e.target.value})}
+              options={[
+                {value:'',label:'— Select Unit —'},
+                ...(receivePOItemDetails.base_unit ? [{value:receivePOItemDetails.base_unit.id,label:`${receivePOItemDetails.base_unit.name} (Base Unit)`}] : []),
+                ...(receivePOItemDetails.conversions || []).map(c=>({value:c.purchase_unit_id,label:`${c.purchase_unit_name} (1 = ${c.conversion_factor} ${receivePOItemDetails.base_unit?.name || 'units'})`}))
+              ]}
+              error={errors.received_unit_id} onBlur={e=>handleBlur('received_unit_id', e.target.value)}/>
+          )}
+
           {selectedPOItem && (
             <div className="sm:col-span-2 grid grid-cols-3 gap-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg text-sm">
               <div><span className="text-gray-500 dark:text-gray-400">Ordered:</span><span className="ml-1 font-bold">{selectedPOItem.quantity_ordered}</span></div>
@@ -246,8 +294,51 @@ export default function Receiving() {
               <div><span className="text-gray-500 dark:text-gray-400">Remaining:</span><span className="ml-1 font-bold text-blue-600 dark:text-blue-400">{remainingQty}</span></div>
             </div>
           )}
-          <FormInput type="number" min="1" max={remainingQty || undefined} label={edit ? 'Corrected Quantity' : 'Quantity to Receive Now'} required value={formPO.quantity_received} onChange={e=>setFormPO({...formPO,quantity_received:e.target.value})}
-            error={errors.quantity_received || (!edit && remainingQty !== null && Number(formPO.quantity_received) > remainingQty ? `Cannot exceed remaining quantity (${remainingQty})` : '')}
+
+          {receivePOItemDetails && !edit && formPO.received_unit_id && formPO.quantity_received > 0 && (() => {
+            const qty = Number(formPO.quantity_received);
+            const selectedUnitId = Number(formPO.received_unit_id);
+            const baseUnitId = receivePOItemDetails.base_unit?.id;
+            const baseUnitName = receivePOItemDetails.base_unit?.name || 'units';
+
+            let conversionFactor = 1;
+            let selectedUnitName = baseUnitName;
+
+            if (selectedUnitId === baseUnitId) {
+              conversionFactor = 1;
+              selectedUnitName = baseUnitName;
+            } else {
+              const conv = (receivePOItemDetails.conversions || []).find(c => c.purchase_unit_id === selectedUnitId);
+              if (conv) {
+                conversionFactor = conv.conversion_factor;
+                selectedUnitName = conv.purchase_unit_name;
+              }
+            }
+
+            const baseQuantity = qty * conversionFactor;
+            const exceedsRemaining = remainingQty !== null && baseQuantity > remainingQty;
+
+            return (
+              <div className={`sm:col-span-2 p-3 rounded-lg border ${exceedsRemaining ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-800' : 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800'}`}>
+                <div className={`text-sm font-medium mb-2 ${exceedsRemaining ? 'text-red-800 dark:text-red-200' : 'text-green-800 dark:text-green-200'}`}>
+                  {exceedsRemaining ? '⚠️ Conversion Preview (Exceeds Remaining):' : '📦 Conversion Preview:'}
+                </div>
+                <div className={`text-base font-bold ${exceedsRemaining ? 'text-red-700 dark:text-red-300' : 'text-green-700 dark:text-green-300'}`}>
+                  {conversionFactor === 1
+                    ? `${qty} ${selectedUnitName}`
+                    : `${qty} ${selectedUnitName} = ${baseQuantity} ${baseUnitName}`}
+                </div>
+                {remainingQty !== null && (
+                  <div className={`text-sm mt-2 ${exceedsRemaining ? 'text-red-600 dark:text-red-400' : 'text-green-600 dark:text-green-400'}`}>
+                    Remaining: {remainingQty} {baseUnitName} {exceedsRemaining ? `(cannot receive ${baseQuantity})` : ''}
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+
+          <FormInput type="number" min="1" label={edit ? 'Corrected Quantity' : 'Quantity to Receive Now'} required value={formPO.quantity_received} onChange={e=>setFormPO({...formPO,quantity_received:e.target.value})}
+            error={errors.quantity_received}
             onBlur={e=>handleBlur('quantity_received', e.target.value)}/>
           <FormInput label="Receiver Name" required value={formPO.receiver_name||''} onChange={e=>setFormPO({...formPO,receiver_name:e.target.value})}
             error={errors.receiver_name} onBlur={e=>handleBlur('receiver_name', e.target.value)}/>
