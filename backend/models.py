@@ -116,7 +116,10 @@ class AssignItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     assign_number = Column(String(50), unique=True, nullable=False, index=True)
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
-    quantity = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)  # Base unit quantity (always)
+    assigned_unit_id = Column(Integer, ForeignKey("units.id"))  # Unit selected for assignment
+    conversion_factor = Column(Integer)  # Snapshot of conversion at assignment time
+    assigned_quantity_display = Column(Integer)  # Original quantity in selected unit
     assign_type = Column(String(30), nullable=False)  # Department/Classroom/Teacher
     reference_id = Column(Integer)
     assigned_user_id = Column(Integer, ForeignKey("users.id"))
@@ -128,6 +131,7 @@ class AssignItem(Base):
 
     item = relationship("InventoryItem")
     assigned_user = relationship("User")
+    assigned_unit = relationship("Unit")
 
 
 class PurchaseOrder(Base):
@@ -195,7 +199,10 @@ class ReturnRecord(Base):
     id = Column(Integer, primary_key=True, index=True)
     return_number = Column(String(50), unique=True, nullable=False, index=True)
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
-    quantity_returned = Column(Integer, nullable=False)
+    quantity_returned = Column(Integer, nullable=False)  # Base unit quantity (always)
+    returned_unit_id = Column(Integer, ForeignKey("units.id"))  # Unit selected for return
+    conversion_factor = Column(Integer)  # Snapshot of conversion at return time
+    returned_quantity_display = Column(Integer)  # Original quantity in selected unit
     return_reason = Column(Text)
     condition = Column(String(20), default="Good")  # Good/Damaged
     date_returned = Column(DateTime, default=_now)
@@ -205,6 +212,7 @@ class ReturnRecord(Base):
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     item = relationship("InventoryItem")
+    returned_unit = relationship("Unit")
 
 
 class StockMovement(Base):

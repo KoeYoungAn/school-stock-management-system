@@ -872,6 +872,10 @@ def _asn_dict(a: models.AssignItem) -> dict:
         "assigned_user_id": a.assigned_user_id,
         "status": a.status, "notes": a.notes,
         "assigned_date": a.assigned_date,
+        "assigned_unit_id": a.assigned_unit_id,
+        "assigned_unit_name": a.assigned_unit.name if a.assigned_unit else None,
+        "conversion_factor": a.conversion_factor,
+        "assigned_quantity_display": a.assigned_quantity_display,
     }
 
 
@@ -926,19 +930,58 @@ def create_assignment(payload: schemas.AssignCreate,
                       user: models.User = Depends(require_staff)):
     if payload.quantity <= 0:
         raise HTTPException(400, "Quantity must be positive")
-    item = db.query(models.InventoryItem).filter(models.InventoryItem.id == payload.item_id, models.InventoryItem.is_deleted == False).first()  # noqa
+
+    # Fetch item with base_unit and conversions for unit validation
+    item = db.query(models.InventoryItem).options(
+        joinedload(models.InventoryItem.base_unit),
+        joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit)
+    ).filter(models.InventoryItem.id == payload.item_id, models.InventoryItem.is_deleted == False).first()  # noqa
     if not item:
         raise HTTPException(404, "Item not found")
+
+    # Unit conversion validation and calculation
+    assigned_unit_id = payload.assigned_unit_id
+    quantity_in_unit = payload.quantity  # Display quantity in selected unit
+
+    # Validate unit: must be base unit or configured purchase unit
+    if item.base_unit_id and assigned_unit_id != item.base_unit_id:
+        # Check if it's a configured purchase unit
+        valid_unit = any(c.purchase_unit_id == assigned_unit_id for c in item.conversions)
+        if not valid_unit:
+            raise HTTPException(400, f"Invalid unit for this item. Must be base unit or configured purchase unit.")
+
+    # Get conversion factor
+    conversion_factor = get_conversion_factor(db, item.id, assigned_unit_id)
+    if conversion_factor <= 0:
+        raise HTTPException(400, "Invalid conversion factor")
+
+    # Calculate base quantity
+    base_quantity = quantity_in_unit * conversion_factor
+
+    # Validate against available stock (only if status will reduce stock)
+    if payload.status in REDUCING:
+        if base_quantity > item.quantity:
+            raise HTTPException(400, f"Insufficient stock. Available: {item.quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}, Requested: {base_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}")
+
+    # Create assignment record with unit context
     a = models.AssignItem(
         assign_number=gen_assign_number(db),
-        item_id=payload.item_id, quantity=payload.quantity,
+        item_id=payload.item_id,
+        quantity=base_quantity,  # Store base quantity
+        assigned_unit_id=assigned_unit_id,
+        conversion_factor=conversion_factor,
+        assigned_quantity_display=quantity_in_unit,
         assign_type=payload.assign_type,
-        reference_id=payload.reference_id, assigned_user_id=payload.assigned_user_id,
-        status=payload.status, notes=payload.notes,
+        reference_id=payload.reference_id,
+        assigned_user_id=payload.assigned_user_id,
+        status=payload.status,
+        notes=payload.notes,
     )
     db.add(a)
+
+    # Record stock movement using base quantity
     if payload.status in REDUCING:
-        record_movement(db, item, "OUT", payload.quantity, "Assignment", None, user.id,
+        record_movement(db, item, "OUT", base_quantity, "Assignment", None, user.id,
                         f"Assignment {a.assign_number}")
     db.commit(); db.refresh(a)
     # update movement source_id now that we have a.id
@@ -952,7 +995,17 @@ def create_assignment(payload: schemas.AssignCreate,
             last.source_id = a.id
             db.commit()
     log_audit(db, user.id, "create", "assignments", a.id, f"Created assignment {a.assign_number}")
-    return {"id": a.id, "assign_number": a.assign_number}
+
+    # Get unit name for response
+    unit = db.query(models.Unit).filter(models.Unit.id == assigned_unit_id).first()
+    unit_name = unit.name if unit else "units"
+
+    return {
+        "id": a.id,
+        "assign_number": a.assign_number,
+        "conversion_display": f"{quantity_in_unit} {unit_name} = {base_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}" if conversion_factor > 1 else f"{base_quantity} {unit_name}",
+        "base_quantity": base_quantity
+    }
 
 
 @asn_router.get("/{aid}")
@@ -1796,6 +1849,10 @@ def _ret_dict(r: models.ReturnRecord) -> dict:
         "quantity_returned": r.quantity_returned, "return_reason": r.return_reason,
         "condition": r.condition, "date_returned": r.date_returned,
         "received_by": r.received_by, "notes": r.notes,
+        "returned_unit_id": r.returned_unit_id,
+        "returned_unit_name": r.returned_unit.name if r.returned_unit else None,
+        "conversion_factor": r.conversion_factor,
+        "returned_quantity_display": r.returned_quantity_display,
     }
 
 
@@ -1843,25 +1900,72 @@ def create_return(payload: schemas.ReturnCreate, db: Session = Depends(get_db),
                   user: models.User = Depends(require_staff)):
     if payload.quantity_returned <= 0:
         raise HTTPException(400, "Quantity must be positive")
-    item = db.query(models.InventoryItem).filter(models.InventoryItem.id == payload.item_id).first()
+
+    # Fetch item with base_unit and conversions for unit validation
+    item = db.query(models.InventoryItem).options(
+        joinedload(models.InventoryItem.base_unit),
+        joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit)
+    ).filter(models.InventoryItem.id == payload.item_id).first()
     if not item:
         raise HTTPException(404, "Item not found")
+
+    # Unit conversion validation and calculation
+    returned_unit_id = payload.returned_unit_id
+    quantity_in_unit = payload.quantity_returned  # Display quantity in selected unit
+
+    # Validate unit: must be base unit or configured purchase unit
+    if item.base_unit_id and returned_unit_id != item.base_unit_id:
+        # Check if it's a configured purchase unit
+        valid_unit = any(c.purchase_unit_id == returned_unit_id for c in item.conversions)
+        if not valid_unit:
+            raise HTTPException(400, f"Invalid unit for this item. Must be base unit or configured purchase unit.")
+
+    # Get conversion factor
+    conversion_factor = get_conversion_factor(db, item.id, returned_unit_id)
+    if conversion_factor <= 0:
+        raise HTTPException(400, "Invalid conversion factor")
+
+    # Calculate base quantity
+    base_quantity = quantity_in_unit * conversion_factor
+
+    # Create return record with unit context
     r = models.ReturnRecord(
         return_number=gen_return_number(db),
-        item_id=payload.item_id, quantity_returned=payload.quantity_returned,
-        return_reason=payload.return_reason, condition=payload.condition,
-        received_by=payload.received_by, notes=payload.notes,
+        item_id=payload.item_id,
+        quantity_returned=base_quantity,  # Store base quantity
+        returned_unit_id=returned_unit_id,
+        conversion_factor=conversion_factor,
+        returned_quantity_display=quantity_in_unit,
+        return_reason=payload.return_reason,
+        condition=payload.condition,
+        received_by=payload.received_by,
+        notes=payload.notes,
     )
     db.add(r); db.flush()
+
+    # Record stock movement using base quantity (only for Good condition - return to stock)
     if payload.condition == "Good":
-        record_movement(db, item, "IN", payload.quantity_returned,
+        record_movement(db, item, "IN", base_quantity,
                         "Return", r.id, user.id, f"Return {r.return_number}")
     else:
+        # Damaged items don't return to stock
         log_audit(db, user.id, "damaged_return", "returns", r.id,
-                  f"Damaged return {r.return_number} qty={payload.quantity_returned}")
+                  f"Damaged return {r.return_number} qty={base_quantity} (not added to stock)")
+
     db.commit()
     log_audit(db, user.id, "create", "returns", r.id, f"Created return {r.return_number}")
-    return {"id": r.id, "return_number": r.return_number}
+
+    # Get unit name for response
+    unit = db.query(models.Unit).filter(models.Unit.id == returned_unit_id).first()
+    unit_name = unit.name if unit else "units"
+
+    return {
+        "id": r.id,
+        "return_number": r.return_number,
+        "conversion_display": f"{quantity_in_unit} {unit_name} = {base_quantity} {item.base_unit.abbreviation if item.base_unit else 'units'}" if conversion_factor > 1 else f"{base_quantity} {unit_name}",
+        "base_quantity": base_quantity,
+        "added_to_stock": payload.condition == "Good"
+    }
 
 
 @ret_router.get("/{rid}")

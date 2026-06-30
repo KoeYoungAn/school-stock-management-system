@@ -232,7 +232,7 @@ class AssignBase(BaseModel):
 
 
 class AssignCreate(AssignBase):
-    pass
+    assigned_unit_id: int  # Unit selected for assignment (base or purchase unit)
 
 
 class AssignUpdate(BaseModel):
@@ -251,6 +251,10 @@ class AssignOut(AssignBase):
     item_name: Optional[str] = None
     item_code: Optional[str] = None
     assigned_date: Optional[datetime] = None
+    assigned_unit_id: Optional[int] = None
+    assigned_unit_name: Optional[str] = None  # Display unit name for readability
+    conversion_factor: Optional[int] = None  # Snapshot of conversion at assignment time
+    assigned_quantity_display: Optional[int] = None  # Original quantity in selected unit
 
     class Config:
         from_attributes = True
@@ -387,7 +391,7 @@ class ReturnBase(BaseModel):
 
 
 class ReturnCreate(ReturnBase):
-    pass
+    returned_unit_id: int  # Unit selected for return (base or purchase unit)
 
 
 class ReturnUpdate(BaseModel):
@@ -404,6 +408,10 @@ class ReturnOut(ReturnBase):
     item_name: Optional[str] = None
     item_code: Optional[str] = None
     date_returned: Optional[datetime] = None
+    returned_unit_id: Optional[int] = None
+    returned_unit_name: Optional[str] = None  # Display unit name for readability
+    conversion_factor: Optional[int] = None  # Snapshot of conversion at return time
+    returned_quantity_display: Optional[int] = None  # Original quantity in selected unit
 
     class Config:
         from_attributes = True
