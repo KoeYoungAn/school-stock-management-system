@@ -1025,8 +1025,14 @@ def _po_dict(po: models.PurchaseOrder) -> dict:
             "id": i.id, "purchase_order_id": i.purchase_order_id, "item_id": i.item_id,
             "item_code": i.item.item_code if i.item else None,
             "item_name": i.item.item_name if i.item else None,
-            "quantity_ordered": i.quantity_ordered,
+            "quantity_ordered": i.quantity_ordered,  # Base quantity (stored in DB)
             "quantity_received": i.quantity_received, "notes": i.notes,
+            # Phase 6: Unit conversion context
+            "ordered_unit_id": i.ordered_unit_id,
+            "ordered_unit_name": i.ordered_unit.name if i.ordered_unit else None,
+            "conversion_factor": i.conversion_factor,
+            "ordered_quantity_display": i.ordered_quantity_display,
+            "ordered_base_quantity": i.quantity_ordered,  # Same as quantity_ordered (for clarity in API)
         } for i in items],
     }
 
@@ -1100,13 +1106,51 @@ def create_po(payload: schemas.POCreate, db: Session = Depends(get_db),
         status=payload.status, notes=payload.notes,
     )
     db.add(po); db.flush()
+
+    # Phase 6: Process PO items with unit conversion support
     for it in payload.items:
         if it.quantity_ordered <= 0:
             raise HTTPException(400, "Quantity ordered must be positive")
+
+        # Get item with base_unit and conversions relationships
+        from sqlalchemy.orm import joinedload
+        item = db.query(models.InventoryItem).options(
+            joinedload(models.InventoryItem.base_unit),
+            joinedload(models.InventoryItem.conversions).joinedload(models.ItemUnitConversion.purchase_unit)
+        ).filter(models.InventoryItem.id == it.item_id).first()
+
+        if not item:
+            raise HTTPException(404, f"Item {it.item_id} not found")
+
+        # Validate ordered_unit_id and get conversion factor
+        ordered_unit_id = it.ordered_unit_id
+        quantity_in_unit = it.quantity_ordered  # Display quantity from schema
+
+        # Check if ordered_unit is the item's base unit
+        if item.base_unit_id and ordered_unit_id == item.base_unit_id:
+            conversion_factor = 1
+        else:
+            # Get conversion factor using helper from utils.py
+            from utils import get_conversion_factor
+            conversion_factor = get_conversion_factor(db, item.id, ordered_unit_id)
+            if not conversion_factor or conversion_factor <= 0:
+                raise HTTPException(400,
+                    f"Invalid unit for item {item.item_code}. Selected unit must be the item's base unit or a configured purchase unit with a valid conversion.")
+
+        # Calculate base quantity
+        base_quantity = quantity_in_unit * conversion_factor
+
+        # Create PO item with unit conversion context
         db.add(models.PurchaseOrderItem(
-            purchase_order_id=po.id, item_id=it.item_id,
-            quantity_ordered=it.quantity_ordered, notes=it.notes,
+            purchase_order_id=po.id,
+            item_id=it.item_id,
+            quantity_ordered=base_quantity,  # Store BASE quantity
+            ordered_unit_id=ordered_unit_id,  # Phase 6: Store selected unit
+            conversion_factor=conversion_factor,  # Phase 6: Store conversion snapshot
+            ordered_quantity_display=quantity_in_unit,  # Phase 6: Store display quantity
+            notes=it.notes,
         ))
+
     db.commit(); db.refresh(po)
     log_audit(db, user.id, "create", "purchase_orders", po.id, f"Created PO {po.po_number}")
     return {"id": po.id, "po_number": po.po_number}

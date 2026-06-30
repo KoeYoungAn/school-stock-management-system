@@ -154,14 +154,18 @@ class PurchaseOrderItem(Base):
     id = Column(Integer, primary_key=True, index=True)
     purchase_order_id = Column(Integer, ForeignKey("purchase_orders.id"), nullable=False)
     item_id = Column(Integer, ForeignKey("inventory_items.id"), nullable=False)
-    quantity_ordered = Column(Integer, nullable=False)
+    quantity_ordered = Column(Integer, nullable=False)  # Always stores BASE unit quantity
     quantity_received = Column(Integer, default=0)
+    ordered_unit_id = Column(Integer, ForeignKey("units.id"))  # Phase 6: Unit selected for order
+    conversion_factor = Column(Integer)  # Phase 6: Snapshot of conversion at PO creation
+    ordered_quantity_display = Column(Integer)  # Phase 6: Original quantity in selected unit
     notes = Column(Text)
     created_at = Column(DateTime, default=_now)
     updated_at = Column(DateTime, default=_now, onupdate=_now)
 
     purchase_order = relationship("PurchaseOrder", back_populates="items")
     item = relationship("InventoryItem")
+    ordered_unit = relationship("Unit", foreign_keys=[ordered_unit_id])  # Phase 6
 
 
 class Receiving(Base):

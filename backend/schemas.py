@@ -259,7 +259,8 @@ class AssignOut(AssignBase):
 # ---------- Purchase Order ----------
 class POItemBase(BaseModel):
     item_id: int
-    quantity_ordered: int = Field(gt=0)
+    ordered_unit_id: int  # Phase 6: Unit selected for order (base or purchase unit)
+    quantity_ordered: int = Field(gt=0)  # Phase 6: Quantity in the selected unit (display quantity)
     notes: Optional[str] = None
 
 
@@ -269,6 +270,7 @@ class POItemCreate(POItemBase):
 
 class POItemUpdate(BaseModel):
     item_id: Optional[int] = None
+    ordered_unit_id: Optional[int] = None  # Phase 6
     quantity_ordered: Optional[int] = None
     notes: Optional[str] = None
 
@@ -277,6 +279,10 @@ class POItemOut(POItemBase):
     id: int
     purchase_order_id: int
     quantity_received: int
+    ordered_unit_name: Optional[str] = None  # Phase 6: For display
+    conversion_factor: Optional[int] = None  # Phase 6: Snapshot
+    ordered_quantity_display: Optional[int] = None  # Phase 6: Original display quantity
+    ordered_base_quantity: Optional[int] = None  # Phase 6: Calculated base quantity (stored in quantity_ordered DB field)
     item_name: Optional[str] = None
     item_code: Optional[str] = None
 

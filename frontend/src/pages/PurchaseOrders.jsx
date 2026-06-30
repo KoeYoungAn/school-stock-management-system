@@ -31,6 +31,8 @@ export default function PurchaseOrders() {
   const [open,setOpen]=useState(false); const [edit,setEdit]=useState(null)
   const [view,setView]=useState(null); const [del,setDel]=useState(null)
   const [suppliers,setSuppliers]=useState([]); const [items,setItems]=useState([])
+  const [units, setUnits] = useState([])  // Phase 6: For unit conversion
+  const [itemDetails, setItemDetails] = useState({})  // Phase 6: Store item details by item_id
   const [form,setForm]=useState({ supplier_id:'', expected_delivery_date:'', status:'Draft', notes:'', items:[] })
   const { errors, validateAll, handleBlur, clearErrors, hasErrors } = useValidation(poSchema)
 
@@ -43,15 +45,28 @@ export default function PurchaseOrders() {
   useEffect(()=>{
     api.get('/api/suppliers?limit=500').then(r=>setSuppliers(r.data.items)).catch(()=>{})
     api.get('/api/inventory?limit=500').then(r=>setItems(r.data.items)).catch(()=>{})
+    api.get('/api/units?limit=200').then(r=>setUnits(r.data.items)).catch(()=>{})  // Phase 6: Fetch units
   },[])
 
-  const openNew = () => { setEdit(null); setForm({ supplier_id:'', expected_delivery_date:'', status:'Draft', notes:'', items:[{item_id:'',quantity_ordered:1}] }); clearErrors(); setOpen(true) }
+  // Phase 6: Fetch item details for unit conversion when items change
+  useEffect(() => {
+    if (!open || edit) return  // Only for new PO creation
+    form.items.forEach(lineItem => {
+      if (lineItem.item_id && !itemDetails[lineItem.item_id]) {
+        api.get(`/api/inventory/${lineItem.item_id}`)
+          .then(r => setItemDetails(prev => ({...prev, [lineItem.item_id]: r.data})))
+          .catch(()=>{})
+      }
+    })
+  }, [form.items, open, edit])
+
+  const openNew = () => { setEdit(null); setForm({ supplier_id:'', expected_delivery_date:'', status:'Draft', notes:'', items:[{item_id:'',ordered_unit_id:'',quantity_ordered:1}] }); clearErrors(); setOpen(true) }
   const openEdit = (r) => { setEdit(r); setForm({
     supplier_id:r.supplier_id, expected_delivery_date: r.expected_delivery_date?.slice(0,10)||'', status:r.status, notes:r.notes||'',
     items: r.items
   }); clearErrors(); setOpen(true) }
 
-  const addLine = () => setForm(f => ({...f, items:[...f.items, {item_id:'',quantity_ordered:1}]}))
+  const addLine = () => setForm(f => ({...f, items:[...f.items, {item_id:'',ordered_unit_id:'',quantity_ordered:1}]}))
   const setLine = (i, patch) => setForm(f => ({...f, items: f.items.map((x,ix)=> ix===i?{...x,...patch}:x)}))
   const rmLine = (i) => setForm(f => ({...f, items: f.items.filter((_,ix)=>ix!==i)}))
 
@@ -59,8 +74,9 @@ export default function PurchaseOrders() {
     e.preventDefault()
     const { isValid } = validateAll(form)
     if (!isValid) { toast.error('Please fix validation errors'); return }
-    if (form.items.length === 0 || !form.items.every(l => l.item_id && l.quantity_ordered > 0)) {
-      toast.error('Please add at least one valid line item'); return
+    // Phase 6: Validate that each item has item_id, ordered_unit_id, and quantity
+    if (form.items.length === 0 || !form.items.every(l => l.item_id && l.ordered_unit_id && l.quantity_ordered > 0)) {
+      toast.error('Please add at least one valid line item with unit selected'); return
     }
     try {
       const payload = {
@@ -71,7 +87,13 @@ export default function PurchaseOrders() {
       if (edit) {
         await api.put(`/api/purchase-orders/${edit.id}`, payload)
       } else {
-        payload.items = form.items.filter(l=>l.item_id).map(l=>({item_id:Number(l.item_id), quantity_ordered:Number(l.quantity_ordered), notes:l.notes||null}))
+        // Phase 6: Include ordered_unit_id in payload
+        payload.items = form.items.filter(l=>l.item_id).map(l=>({
+          item_id:Number(l.item_id),
+          ordered_unit_id:Number(l.ordered_unit_id),
+          quantity_ordered:Number(l.quantity_ordered),
+          notes:l.notes||null
+        }))
         await api.post('/api/purchase-orders', payload)
       }
       toast.success('Saved'); setOpen(false); load()
@@ -155,15 +177,70 @@ export default function PurchaseOrders() {
                 <button type="button" onClick={addLine} className="px-2 py-1 text-sm rounded border border-gray-300 dark:border-gray-600">+ {t('addItem', language)}</button>
               </div>
               {form.items.map((l,i)=>(
-                <div key={i} className="grid grid-cols-12 gap-2 mb-2">
-                  <select value={l.item_id} onChange={e=>setLine(i,{item_id:e.target.value})}
-                    className="col-span-7 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900">
-                    <option value="">— Item —</option>
-                    {items.map(it=> <option key={it.id} value={it.id}>{it.item_code} {it.item_name}</option>)}
-                  </select>
-                  <input type="number" min="1" value={l.quantity_ordered} onChange={e=>setLine(i,{quantity_ordered:e.target.value})}
-                    className="col-span-3 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"/>
-                  <button type="button" onClick={()=>rmLine(i)} className="col-span-2 px-2 py-1 rounded border border-red-300 text-red-600">{t('removeItem', language)}</button>
+                <div key={i} className="border border-gray-200 dark:border-gray-700 rounded-lg p-2 mb-2 bg-gray-50 dark:bg-gray-800/50">
+                  <div className="grid grid-cols-12 gap-2">
+                    <select value={l.item_id} onChange={e=>setLine(i,{item_id:e.target.value,ordered_unit_id:'',quantity_ordered:1})}
+                      className="col-span-10 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900">
+                      <option value="">— Item —</option>
+                      {items.map(it=> <option key={it.id} value={it.id}>{it.item_code} {it.item_name}</option>)}
+                    </select>
+                    <button type="button" onClick={()=>rmLine(i)} className="col-span-2 px-2 py-1 rounded border border-red-300 text-red-600 text-sm">{t('removeItem', language)}</button>
+                  </div>
+                  {l.item_id && itemDetails[l.item_id] && (
+                    <>
+                      <div className="grid grid-cols-12 gap-2 mt-2">
+                        <select value={l.ordered_unit_id||''} onChange={e=>setLine(i,{ordered_unit_id:e.target.value})}
+                          className="col-span-6 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900">
+                          <option value="">— Unit —</option>
+                          {itemDetails[l.item_id].base_unit && (
+                            <option value={itemDetails[l.item_id].base_unit.id}>
+                              {itemDetails[l.item_id].base_unit.name} (Base Unit)
+                            </option>
+                          )}
+                          {(itemDetails[l.item_id].conversions || []).map(c => (
+                            <option key={c.purchase_unit_id} value={c.purchase_unit_id}>
+                              {c.purchase_unit_name} (1 = {c.conversion_factor} {itemDetails[l.item_id].base_unit?.name || 'units'})
+                            </option>
+                          ))}
+                        </select>
+                        <input type="number" min="1" value={l.quantity_ordered} onChange={e=>setLine(i,{quantity_ordered:e.target.value})}
+                          className="col-span-6 px-2 py-1 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-900"
+                          placeholder="Quantity"/>
+                      </div>
+                      {l.ordered_unit_id && l.quantity_ordered > 0 && (() => {
+                        const qty = Number(l.quantity_ordered);
+                        const selectedUnitId = Number(l.ordered_unit_id);
+                        const baseUnitId = itemDetails[l.item_id].base_unit?.id;
+                        const baseUnitName = itemDetails[l.item_id].base_unit?.name || 'units';
+
+                        let conversionFactor = 1;
+                        let selectedUnitName = baseUnitName;
+
+                        if (selectedUnitId === baseUnitId) {
+                          conversionFactor = 1;
+                          selectedUnitName = baseUnitName;
+                        } else {
+                          const conv = (itemDetails[l.item_id].conversions || []).find(c => c.purchase_unit_id === selectedUnitId);
+                          if (conv) {
+                            conversionFactor = conv.conversion_factor;
+                            selectedUnitName = conv.purchase_unit_name;
+                          }
+                        }
+
+                        const baseQuantity = qty * conversionFactor;
+
+                        return (
+                          <div className="mt-2 p-2 bg-blue-50 dark:bg-blue-900/20 rounded border border-blue-200 dark:border-blue-800 text-sm">
+                            <span className="font-medium text-blue-800 dark:text-blue-200">
+                              {conversionFactor === 1
+                                ? `${qty} ${selectedUnitName}`
+                                : `${qty} ${selectedUnitName} = ${baseQuantity} ${baseUnitName}`}
+                            </span>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
                 </div>
               ))}
             </div>
@@ -194,7 +271,15 @@ export default function PurchaseOrders() {
                 {view.items.map(i=>(
                   <tr key={i.id} className="border-t border-gray-100 dark:border-gray-700">
                     <td className="px-2 py-1">{i.item_code} {i.item_name}</td>
-                    <td className="px-2 py-1 text-center">{i.quantity_ordered}</td>
+                    <td className="px-2 py-1 text-center">
+                      {i.ordered_quantity_display && i.ordered_unit_name && i.conversion_factor ? (
+                        i.conversion_factor === 1
+                          ? `${i.ordered_quantity_display} ${i.ordered_unit_name}`
+                          : <span title={`${i.ordered_quantity_display} ${i.ordered_unit_name} = ${i.quantity_ordered} base units`}>
+                              {i.ordered_quantity_display} {i.ordered_unit_name} <span className="text-xs text-gray-500">({i.quantity_ordered})</span>
+                            </span>
+                      ) : i.quantity_ordered}
+                    </td>
                     <td className="px-2 py-1 text-center">{i.quantity_received}</td>
                   </tr>
                 ))}
